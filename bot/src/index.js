@@ -1,0 +1,1698 @@
+// Punto de entrada del bot de Telegram.
+// Fase 5: flujo completo con consultas, borrado e ingresos.
+
+const { Bot, InlineKeyboard } = require('grammy');
+const config = require('./config');
+const {
+  appendTransaction, getBalance, getMonthlyTransactions,
+  getGastosFijos, updateGastoFijoMonto, getLastTransactions, deleteTransaction,
+  getIncomeStatus, registerIncome, getCurrentIncome, updateIncome, getFlowData,
+  getCuotas, appendCuota, updateCuotaRegistradas, updateCuotaMonto,
+} = require('./sheets');
+const { getCategories } = require('./categories');
+const { parseTransaction, formatAmount } = require('./parser');
+
+const bot = new Bot(config.botToken);
+
+// Verifica si un metodo de pago es una tarjeta de credito (especifica o legacy "Tarjeta")
+function isTarjeta(metodo) {
+  return metodo === 'Tarjeta' || config.todasLasTarjetas.includes(metodo);
+}
+
+// ============================================
+// ESTADO EN MEMORIA
+// ============================================
+
+const pendingTx = new Map();       // Transacciones pendientes de confirmacion
+const pendingDeletes = new Map();   // Borrados pendientes de confirmacion
+const pendingIncome = new Map();    // Ingresos extras pendientes
+const pendingFijos = new Map();     // Gastos fijos pendientes de registro
+const pendingFixedEdit = new Map(); // Edicion de monto de gasto fijo (userId → estado)
+const pendingCuotaEdit = new Map(); // Ajuste de monto cuota post-confirmacion (userId → estado)
+let txCounter = 0;
+const TX_TTL = 10 * 60 * 1000; // 10 minutos
+
+// Nombres de meses en español para parseo y display
+const MESES_NOMBRE = [
+  'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+];
+const MESES_CORTO = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+
+// Limpia entries expirados de cualquier Map
+function cleanMap(map) {
+  const now = Date.now();
+  for (const [id, entry] of map) {
+    if (now - entry.createdAt > TX_TTL) map.delete(id);
+  }
+}
+
+// Fecha actual en Buenos Aires
+function getNowBA() {
+  const now = new Date();
+  const ba = new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+  return { month: ba.getMonth() + 1, year: ba.getFullYear(), day: ba.getDate() };
+}
+
+// Calcula mes de primera cuota segun fecha de compra y dia de cierre de tarjeta.
+// cierre=0 (no configurado) o compra<=cierre → mes siguiente.
+// compra>cierre → mes+2.
+function calcPrimeraCuota(purchaseDate, cierreDay) {
+  function nextMonth(m, y) {
+    return m === 12 ? { month: 1, year: y + 1 } : { month: m + 1, year: y };
+  }
+  if (cierreDay === 0 || purchaseDate.day <= cierreDay) {
+    return nextMonth(purchaseDate.month, purchaseDate.year);
+  }
+  const next = nextMonth(purchaseDate.month, purchaseDate.year);
+  return nextMonth(next.month, next.year);
+}
+
+function formatMesAnio(month, year) {
+  return `${String(month).padStart(2, '0')}/${year}`;
+}
+
+function parseMesAnio(str) {
+  const parts = str.split('/');
+  return { month: parseInt(parts[0]), year: parseInt(parts[1]) };
+}
+
+function monthsDiff(from, to) {
+  return (to.year - from.year) * 12 + (to.month - from.month);
+}
+
+// Determina cuotas pendientes para el mes actual.
+// Una cuota es pendiente si el mes actual esta dentro de su rango y la cuota esperada > registradas.
+function getPendingCuotasForMonth(cuotas, month, year) {
+  const now = { month, year };
+  const result = [];
+  for (const c of cuotas) {
+    if (!c.primeraCuota || c.cuotasRegistradas >= c.cuotasTotales) continue;
+    const primera = parseMesAnio(c.primeraCuota);
+    const diff = monthsDiff(primera, now);
+    if (diff < 0 || diff >= c.cuotasTotales) continue;
+    const cuotaEsperada = diff + 1;
+    if (c.cuotasRegistradas >= cuotaEsperada) continue;
+    result.push({ ...c, cuotaNumero: cuotaEsperada, esCuota: true });
+  }
+  return result;
+}
+
+// Filtra cuotas relevantes para un usuario (individual propio + compartidos)
+// Compartido, vacío, o desconocido → visible para ambos.
+function filterCuotasForUser(cuotas, userId) {
+  const esMoises = userId === config.moisesId;
+  return cuotas.filter(c => {
+    const tipo = (c.tipo || '').toLowerCase().trim();
+    if (tipo.includes('moises')) return esMoises;
+    if (tipo.includes('oriana')) return !esMoises;
+    return true;
+  });
+}
+
+// Construye texto del listado con gastos fijos + cuotas pendientes
+function buildFijosAndCuotasText(gastos, cuotas) {
+  let text = `📋 *Gastos fijos y cuotas pendientes*\n\n`;
+  let idx = 1;
+  if (gastos.length > 0) {
+    text += '*Gastos fijos:*\n';
+    for (const g of gastos) {
+      text += `${idx}. ${g.descripcion} — ${fmtMonto(g.montoEstimado, g.moneda)} (${g.metodoPago})\n`;
+      idx++;
+    }
+  }
+  if (cuotas.length > 0) {
+    if (gastos.length > 0) text += '\n';
+    text += '*Cuotas:*\n';
+    for (const c of cuotas) {
+      text += `${idx}. 💳 ${c.descripcion} (Cuota ${c.cuotaNumero}/${c.cuotasTotales}) — ${fmtMonto(c.montoCuota, c.moneda)} (${c.tarjeta})\n`;
+      idx++;
+    }
+  }
+  text += `\nTotal: ${gastos.length + cuotas.length} pendientes`;
+  return text;
+}
+
+// Parsea argumento de mes: "febrero", "feb", "2", o vacio (= mes actual)
+function parseMonth(arg) {
+  const { month, year } = getNowBA();
+  if (!arg || !arg.trim()) return { month, year };
+
+  const lower = arg.trim().toLowerCase();
+
+  // Numero directo
+  const num = parseInt(lower);
+  if (num >= 1 && num <= 12) return { month: num, year };
+
+  // Nombre completo o inicio
+  const idx = MESES_NOMBRE.findIndex(m => m.startsWith(lower));
+  if (idx !== -1) return { month: idx + 1, year };
+
+  return { month, year };
+}
+
+// Formatea un monto para display (reutiliza logica del parser)
+function fmtMonto(monto, moneda) {
+  return formatAmount(monto, moneda || 'ARS');
+}
+
+// ============================================
+// MIDDLEWARE
+// ============================================
+
+bot.use((ctx, next) => {
+  const userId = ctx.from?.id;
+  if (userId !== config.moisesId && userId !== config.orianaId) {
+    return ctx.reply('No tenés acceso a este bot.');
+  }
+  return next();
+});
+
+// ============================================
+// COMANDOS
+// ============================================
+
+// /start
+bot.command('start', (ctx) => {
+  ctx.reply(
+    'PlataBot activo.\n\n' +
+    'Enviá un gasto como texto:\n' +
+    '• uber 3500\n' +
+    '• super 15000 compartido\n' +
+    '• 100 usd ahorro\n\n' +
+    'Comandos:\n' +
+    '/balance — Quién le debe a quién\n' +
+    '/resumen — Gastos del mes\n' +
+    '/flujo — Ingresos vs gastos vs sobrante\n' +
+    '/tarjeta — Gastos con tarjeta de crédito\n' +
+    '/gastosfijos — Estado de gastos fijos\n' +
+    '/registrar\\_fijos — Registrar gastos fijos del mes\n' +
+    '/ultimas — Últimas transacciones\n' +
+    '/borrar — Borrar una transacción\n' +
+    '/cuotas — Ver estado de compras en cuotas\n' +
+    '/cotizacion — Registrar ingresos del mes\n' +
+    '/ingreso — Registrar ingreso extra\n' +
+    '/ping — Verificar conexión'
+  );
+});
+
+// /ping
+bot.command('ping', async (ctx) => {
+  try {
+    const categorias = await getCategories();
+    ctx.reply(`Conexión OK. Categorías: ${categorias.map(c => c.name).join(', ')}`);
+  } catch (error) {
+    console.error('Error conectando a Google Sheets:', error.message);
+    ctx.reply('Error conectando a Google Sheets. Revisá los logs.');
+  }
+});
+
+// /balance — balance compartido del mes actual
+bot.command('balance', async (ctx) => {
+  try {
+    const { month, year } = getNowBA();
+    const data = await getBalance();
+    const mes = data.meses[month - 1];
+
+    if (!mes || mes.total === 0) {
+      return ctx.reply(`📊 *Balance Compartido — ${MESES_CORTO[month - 1]} ${year}*\n\nNo hay gastos compartidos este mes.`, { parse_mode: 'Markdown' });
+    }
+
+    const text =
+      `📊 *Balance Compartido — ${MESES_CORTO[month - 1]} ${year}*\n\n` +
+      `Total compartido: ${fmtMonto(mes.total, 'ARS')}\n` +
+      `Pagó Moises: ${fmtMonto(mes.pagoMoises, 'ARS')}\n` +
+      `Pagó Oriana: ${fmtMonto(mes.pagoOriana, 'ARS')}\n\n` +
+      `Corresponde Moises: ${fmtMonto(mes.corrMoises, 'ARS')}\n` +
+      `Corresponde Oriana: ${fmtMonto(mes.corrOriana, 'ARS')}\n\n` +
+      `→ ${mes.resultado || 'Están a mano'}` +
+      (data.saldoAcumulado ? `\n\nSaldo acumulado: ${data.saldoAcumulado}` : '');
+
+    await ctx.reply(text, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('Error en /balance:', error.message);
+    ctx.reply('Error consultando el balance. Revisá los logs.');
+  }
+});
+
+// /resumen [mes] — resumen de gastos del mes
+bot.command('resumen', async (ctx) => {
+  try {
+    const arg = ctx.match;
+    const { month, year } = parseMonth(arg);
+    const transactions = await getMonthlyTransactions(month, year);
+
+    if (transactions.length === 0) {
+      return ctx.reply(`📈 *Resumen — ${MESES_CORTO[month - 1]} ${year}*\n\nNo hay transacciones este mes.`, { parse_mode: 'Markdown' });
+    }
+
+    // Totales por moneda
+    let totalArs = 0, totalUsd = 0;
+    const porCategoria = {};
+    const porTipo = {};
+    const porMetodo = {};
+
+    for (const tx of transactions) {
+      if (tx.moneda === 'USD') totalUsd += tx.monto;
+      else totalArs += tx.monto;
+
+      porCategoria[tx.categoria] = (porCategoria[tx.categoria] || 0) + tx.monto;
+      porTipo[tx.tipo] = (porTipo[tx.tipo] || 0) + tx.monto;
+      porMetodo[tx.metodoPago] = (porMetodo[tx.metodoPago] || 0) + tx.monto;
+    }
+
+    let text = `📈 *Resumen — ${MESES_CORTO[month - 1]} ${year}*\n\n`;
+    text += `💰 Total: ${fmtMonto(totalArs, 'ARS')}`;
+    if (totalUsd > 0) text += ` | ${fmtMonto(totalUsd, 'USD')}`;
+    text += `\n📝 ${transactions.length} transacciones\n`;
+
+    // Por categoria (ordenado por monto desc)
+    const catEntries = Object.entries(porCategoria).sort((a, b) => b[1] - a[1]);
+    text += '\n*Por categoría:*\n';
+    for (const [cat, monto] of catEntries) {
+      text += `• ${cat}: ${fmtMonto(monto, 'ARS')}\n`;
+    }
+
+    // Por tipo
+    const tipoEntries = Object.entries(porTipo).sort((a, b) => b[1] - a[1]);
+    text += '\n*Por tipo:*\n';
+    for (const [tipo, monto] of tipoEntries) {
+      text += `• ${tipo}: ${fmtMonto(monto, 'ARS')}\n`;
+    }
+
+    await ctx.reply(text, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('Error en /resumen:', error.message);
+    ctx.reply('Error consultando el resumen. Revisá los logs.');
+  }
+});
+
+// /gastosfijos — estado de gastos fijos del mes actual
+bot.command('gastosfijos', async (ctx) => {
+  try {
+    const { month, year } = getNowBA();
+    const gastos = await getGastosFijos();
+
+    if (gastos.length === 0) {
+      return ctx.reply('No hay gastos fijos configurados.');
+    }
+
+    let text = `📋 *Gastos Fijos — ${MESES_CORTO[month - 1]} ${year}*\n\n`;
+    let faltantes = 0;
+
+    for (const g of gastos) {
+      const estado = g.registrado ? '✅' : '❌';
+      if (!g.registrado) faltantes++;
+      const monto = g.montoEstimado ? ` — ${fmtMonto(g.montoEstimado, g.moneda)}` : '';
+      text += `${estado} ${g.descripcion}${monto}\n`;
+    }
+
+    text += `\n${faltantes === 0 ? 'Todos registrados' : `Faltan ${faltantes} de ${gastos.length}`}`;
+
+    await ctx.reply(text, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('Error en /gastosfijos:', error.message);
+    ctx.reply('Error consultando gastos fijos. Revisá los logs.');
+  }
+});
+
+// /ultimas [n] — ultimas N transacciones
+bot.command('ultimas', async (ctx) => {
+  try {
+    let n = parseInt(ctx.match) || 5;
+    if (n < 1) n = 5;
+    if (n > 10) n = 10;
+
+    const transactions = await getLastTransactions(n);
+
+    if (transactions.length === 0) {
+      return ctx.reply('No hay transacciones registradas.');
+    }
+
+    let text = `📋 *Últimas ${transactions.length} transacciones*\n\n`;
+
+    for (let i = 0; i < transactions.length; i++) {
+      const tx = transactions[i];
+      const fechaCorta = tx.fecha.substring(0, 5); // DD/MM
+      const compartido = tx.tipo === 'Compartido' ? ' 🤝' : '';
+      text += `${i + 1}. ${fechaCorta} — ${tx.descripcion} — ${fmtMonto(tx.monto, tx.moneda)} (${tx.categoria})${compartido}\n`;
+    }
+
+    await ctx.reply(text, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('Error en /ultimas:', error.message);
+    ctx.reply('Error consultando transacciones. Revisá los logs.');
+  }
+});
+
+// /tarjeta [mes] — resumen de gastos con tarjeta de crédito
+bot.command('tarjeta', async (ctx) => {
+  try {
+    const arg = ctx.match;
+    const { month, year } = parseMonth(arg);
+    const transactions = await getMonthlyTransactions(month, year);
+    const tarjeta = transactions.filter(tx => isTarjeta(tx.metodoPago));
+
+    if (tarjeta.length === 0) {
+      return ctx.reply(`💳 *Tarjetas — ${MESES_CORTO[month - 1]} ${year}*\n\nNo hay gastos con tarjeta este mes.`, { parse_mode: 'Markdown' });
+    }
+
+    let total = 0;
+    const porCategoria = {};
+    const porTarjeta = {};
+    for (const tx of tarjeta) {
+      total += tx.monto;
+      porCategoria[tx.categoria] = (porCategoria[tx.categoria] || 0) + tx.monto;
+      porTarjeta[tx.metodoPago] = (porTarjeta[tx.metodoPago] || 0) + tx.monto;
+    }
+
+    let text = `💳 *Tarjetas — ${MESES_CORTO[month - 1]} ${year}*\n\n`;
+    text += `💰 Total: ${fmtMonto(total, 'ARS')}\n`;
+    text += `📝 ${tarjeta.length} transacciones\n`;
+
+    // Desglose por tarjeta (solo si hay mas de un tipo)
+    const tarjetaEntries = Object.entries(porTarjeta).sort((a, b) => b[1] - a[1]);
+    if (tarjetaEntries.length > 1) {
+      text += '\n*Por tarjeta:*\n';
+      for (const [card, monto] of tarjetaEntries) {
+        text += `• ${card}: ${fmtMonto(monto, 'ARS')}\n`;
+      }
+    }
+
+    // Por categoría
+    const catEntries = Object.entries(porCategoria).sort((a, b) => b[1] - a[1]);
+    text += '\n*Por categoría:*\n';
+    for (const [cat, monto] of catEntries) {
+      text += `• ${cat}: ${fmtMonto(monto, 'ARS')}\n`;
+    }
+
+    // Listado con nombre de tarjeta si hay multiples
+    const multiCard = tarjetaEntries.length > 1;
+    text += '\n*Detalle:*\n';
+    for (const tx of tarjeta) {
+      const fechaCorta = tx.fecha.substring(0, 5);
+      const cardLabel = multiCard ? ` [${tx.metodoPago}]` : '';
+      text += `• ${fechaCorta} — ${tx.descripcion} — ${fmtMonto(tx.monto, tx.moneda)}${cardLabel}\n`;
+    }
+
+    await ctx.reply(text, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('Error en /tarjeta:', error.message);
+    ctx.reply('Error consultando gastos de tarjeta. Revisá los logs.');
+  }
+});
+
+// /flujo [mes] — flujo financiero: ingresos vs gastos vs sobrante
+bot.command('flujo', async (ctx) => {
+  try {
+    const arg = ctx.match;
+    const { month, year } = parseMonth(arg);
+    const flow = await getFlowData(month, year);
+
+    const tieneIngresos = flow.totalIngresadoArs > 0 || flow.salarioTotalUsd > 0;
+
+    if (!tieneIngresos && flow.gastadoArs === 0 && flow.gastadoUsd === 0) {
+      return ctx.reply(`💰 *Flujo — ${MESES_CORTO[month - 1]} ${year}*\n\nNo hay datos para este mes.`, { parse_mode: 'Markdown' });
+    }
+
+    let text = `💰 *Flujo — ${MESES_CORTO[month - 1]} ${year}*\n\n`;
+
+    // Sección ARS
+    if (tieneIngresos) {
+      text += `*📥 Ingresos ARS:*\n`;
+      if (flow.moises.recibidoArs > 0) text += `  Moises: ${fmtMonto(flow.moises.recibidoArs, 'ARS')}\n`;
+      if (flow.oriana.recibidoArs > 0) text += `  Oriana: ${fmtMonto(flow.oriana.recibidoArs, 'ARS')}\n`;
+      text += `  Total: ${fmtMonto(flow.totalIngresadoArs, 'ARS')}\n\n`;
+    }
+
+    text += `*📤 Gastos ARS:* ${fmtMonto(flow.gastadoArs, 'ARS')}\n`;
+    if (flow.gastadoTarjeta > 0) {
+      text += `  — Tarjeta: ${fmtMonto(flow.gastadoTarjeta, 'ARS')}\n`;
+    }
+
+    if (tieneIngresos) {
+      text += `*📊 Sobrante ARS:* ${fmtMonto(flow.sobranteArs, 'ARS')}\n`;
+    }
+
+    // Sección USD
+    if (flow.salarioTotalUsd > 0 || flow.gastadoUsd > 0) {
+      text += `\n*💵 USD:*\n`;
+      if (flow.salarioTotalUsd > 0) text += `  Salario total: ${fmtMonto(flow.salarioTotalUsd, 'USD')}\n`;
+      if (flow.transferidoTotal > 0) text += `  Transferido a ARS: ${fmtMonto(flow.transferidoTotal, 'USD')}\n`;
+      if (flow.gastadoUsd > 0) text += `  Gastado USD: ${fmtMonto(flow.gastadoUsd, 'USD')}\n`;
+      if (flow.quedaDeelTotal > 0) text += `  Queda en Deel: ${fmtMonto(flow.quedaDeelTotal, 'USD')}\n`;
+    }
+
+    await ctx.reply(text, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('Error en /flujo:', error.message);
+    ctx.reply('Error consultando el flujo. Revisá los logs.');
+  }
+});
+
+// /registrar_fijos — registra todos los gastos fijos pendientes del mes
+bot.command('registrar_fijos', async (ctx) => {
+  try {
+    const { month, year } = getNowBA();
+    const [gastos, cuotas] = await Promise.all([getGastosFijos(), getCuotas()]);
+
+    const pendientesGF = filterGastosForUser(gastos.filter(g => !g.registrado), ctx.from.id);
+    const pendientesCuotas = filterCuotasForUser(getPendingCuotasForMonth(cuotas, month, year), ctx.from.id);
+
+    if (pendientesGF.length === 0 && pendientesCuotas.length === 0) {
+      return ctx.reply('✅ Todos tus gastos fijos y cuotas del mes ya están registrados.');
+    }
+
+    cleanMap(pendingFijos);
+    const fijoId = ++txCounter;
+
+    pendingFijos.set(fijoId, {
+      gastos: pendientesGF,
+      cuotas: pendientesCuotas,
+      userId: ctx.from.id,
+      createdAt: Date.now(),
+    });
+
+    const text = pendientesCuotas.length > 0
+      ? buildFijosAndCuotasText(pendientesGF, pendientesCuotas)
+      : buildFijosText(pendientesGF);
+
+    const keyboard = new InlineKeyboard()
+      .text('✅ Registrar todos', `fijos_ok:${fijoId}`)
+      .row()
+      .text('✏️ Editar monto', `fijos_edit:${fijoId}`)
+      .text('❌ Cancelar', `fijos_no:${fijoId}`);
+
+    await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: keyboard });
+  } catch (error) {
+    console.error('Error en /registrar_fijos:', error.message);
+    ctx.reply('Error consultando gastos fijos. Revisá los logs.');
+  }
+});
+
+// /cuotas — muestra estado de todas las cuotas
+bot.command('cuotas', async (ctx) => {
+  try {
+    const allCuotas = await getCuotas();
+
+    if (allCuotas.length === 0) {
+      return ctx.reply('No hay cuotas registradas.');
+    }
+
+    const activas = allCuotas.filter(c => c.cuotasRegistradas < c.cuotasTotales);
+    const completadas = allCuotas.filter(c => c.cuotasRegistradas >= c.cuotasTotales);
+
+    let text = `💳 *Cuotas*\n\n`;
+
+    if (activas.length > 0) {
+      text += '*Activas:*\n';
+      for (const c of activas) {
+        text += `• ${c.descripcion} — ${c.cuotasRegistradas}/${c.cuotasTotales} cuotas — ${fmtMonto(c.montoCuota, c.moneda)}/mes (${c.tarjeta})\n`;
+      }
+    }
+
+    if (completadas.length > 0) {
+      text += '\n*Completadas:*\n';
+      for (const c of completadas) {
+        text += `• ✅ ${c.descripcion} — ${c.cuotasTotales} cuotas (${c.tarjeta})\n`;
+      }
+    }
+
+    if (activas.length > 0) {
+      const totalMensual = activas.reduce((sum, c) => sum + c.montoCuota, 0);
+      text += `\n📊 *Total mensual en cuotas:* ${fmtMonto(totalMensual, 'ARS')}`;
+    }
+
+    await ctx.reply(text, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('Error en /cuotas:', error.message);
+    ctx.reply('Error consultando cuotas. Revisá los logs.');
+  }
+});
+
+// /borrar — muestra ultimas transacciones para elegir cual borrar
+bot.command('borrar', async (ctx) => {
+  try {
+    const transactions = await getLastTransactions(5);
+
+    if (transactions.length === 0) {
+      return ctx.reply('No hay transacciones para borrar.');
+    }
+
+    cleanMap(pendingDeletes);
+    const delId = ++txCounter;
+
+    pendingDeletes.set(delId, {
+      transactions,
+      userId: ctx.from.id,
+      createdAt: Date.now(),
+    });
+
+    let text = '🗑️ *¿Cuál querés borrar?*\n\n';
+    for (let i = 0; i < transactions.length; i++) {
+      const tx = transactions[i];
+      const fechaCorta = tx.fecha.substring(0, 5);
+      text += `${i + 1}. ${fechaCorta} — ${tx.descripcion} — ${fmtMonto(tx.monto, tx.moneda)}\n`;
+    }
+
+    const keyboard = new InlineKeyboard();
+    for (let i = 0; i < transactions.length; i++) {
+      keyboard.text(`${i + 1}`, `del_pick:${delId}:${i}`);
+    }
+    keyboard.text('❌ Cancelar', `del_no:${delId}`);
+
+    await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: keyboard });
+  } catch (error) {
+    console.error('Error en /borrar:', error.message);
+    ctx.reply('Error consultando transacciones. Revisá los logs.');
+  }
+});
+
+// /ingreso [monto] [descripcion] — registrar ingreso extra
+bot.command('ingreso', async (ctx) => {
+  try {
+    const args = (ctx.match || '').trim().split(/\s+/);
+    const montoStr = args[0];
+    const descripcion = args.slice(1).join(' ') || 'Ingreso extra';
+
+    if (!montoStr) {
+      return ctx.reply(
+        'Formato: /ingreso [monto] [descripción]\n\n' +
+        'Ejemplos:\n' +
+        '• /ingreso 500 bonus\n' +
+        '• /ingreso 50000 freelance'
+      );
+    }
+
+    // Parsear monto (soportar punto miles y coma decimal)
+    let monto;
+    if (/^\d{1,3}(\.\d{3})+$/.test(montoStr)) {
+      monto = parseFloat(montoStr.replace(/\./g, ''));
+    } else if (/^\d+,\d+$/.test(montoStr)) {
+      monto = parseFloat(montoStr.replace(',', '.'));
+    } else {
+      monto = parseFloat(montoStr);
+    }
+
+    if (!monto || monto <= 0) {
+      return ctx.reply('Monto inválido.');
+    }
+
+    const isMoises = ctx.from.id === config.moisesId;
+    const moneda = isMoises ? 'USD' : 'ARS';
+    const quien = isMoises ? 'Moises' : 'Oriana';
+
+    cleanMap(pendingIncome);
+    const incId = ++txCounter;
+    const { month, year } = getNowBA();
+
+    pendingIncome.set(incId, {
+      monto,
+      moneda,
+      quien: isMoises ? 'moises' : 'oriana',
+      month,
+      descripcion,
+      userId: ctx.from.id,
+      createdAt: Date.now(),
+    });
+
+    const text =
+      `💰 *Ingreso extra*\n\n` +
+      `👤 ${quien}\n` +
+      `💵 ${fmtMonto(monto, moneda)}\n` +
+      `📝 ${descripcion}\n` +
+      `Se suma al ingreso de ${MESES_CORTO[month - 1]} ${year}\n\n` +
+      `¿Confirmar?`;
+
+    const keyboard = new InlineKeyboard()
+      .text('✅ Confirmar', `inc_ok:${incId}`)
+      .text('❌ Cancelar', `inc_no:${incId}`);
+
+    await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: keyboard });
+  } catch (error) {
+    console.error('Error en /ingreso:', error.message);
+    ctx.reply('Error procesando el ingreso. Revisá los logs.');
+  }
+});
+
+// /cotizacion [monto] — registra ingresos del mes con la cotizacion del dia
+bot.command('cotizacion', async (ctx) => {
+  try {
+    const inc = config.income;
+    if (!inc.moisesSalaryUsd || !inc.moisesSalaryArs) {
+      return ctx.reply('Faltan variables de entorno: MOISES_SALARY_USD y MOISES_SALARY_ARS.');
+    }
+
+    const tcStr = (ctx.match || '').trim();
+    if (!tcStr) {
+      return ctx.reply(
+        'Formato: /cotizacion [tipo de cambio]\n\n' +
+        'Ejemplo: /cotizacion 1350\n\n' +
+        'Calcula automáticamente cuántos USD cambiar y registra los ingresos del mes.'
+      );
+    }
+
+    // Parsear TC (soportar punto miles)
+    let tc;
+    if (/^\d{1,3}(\.\d{3})+$/.test(tcStr)) {
+      tc = parseFloat(tcStr.replace(/\./g, ''));
+    } else if (/^\d+,\d+$/.test(tcStr)) {
+      tc = parseFloat(tcStr.replace(',', '.'));
+    } else {
+      tc = parseFloat(tcStr);
+    }
+
+    if (!tc || tc <= 0) {
+      return ctx.reply('Cotización inválida.');
+    }
+
+    const { month, year } = getNowBA();
+
+    // Verificar si ya hay ingresos registrados para este mes
+    const status = await getIncomeStatus(month);
+    const isUpdate = status.moises;
+
+    // Calcular breakdown para Moises
+    const mUsdExacto = inc.moisesSalaryArs / tc;
+    const mUsdRedondeado = Math.ceil(mUsdExacto / 50) * 50;
+    const mExtraUsd = mUsdRedondeado - mUsdExacto;
+    const mQuedaDeel = inc.moisesSalaryUsd - mUsdRedondeado;
+
+    // Calcular breakdown para Oriana (si tiene datos)
+    let oUsdExacto = 0, oUsdRedondeado = 0, oExtraUsd = 0, oQuedaDeel = 0;
+    const hasOriana = inc.orianaSalaryUsd && inc.orianaSalaryArs;
+    if (hasOriana) {
+      oUsdExacto = inc.orianaSalaryArs / tc;
+      oUsdRedondeado = Math.ceil(oUsdExacto / 50) * 50;
+      oExtraUsd = oUsdRedondeado - oUsdExacto;
+      oQuedaDeel = inc.orianaSalaryUsd - oUsdRedondeado;
+    }
+
+    const totalExtraUsd = mExtraUsd + oExtraUsd;
+
+    const cotizId = ++txCounter;
+    cleanMap(pendingIncome);
+
+    pendingIncome.set(cotizId, {
+      type: 'cotizacion',
+      month,
+      year,
+      tc,
+      moises: { usdRedondeado: mUsdRedondeado, quedaDeel: mQuedaDeel, extraUsd: mExtraUsd },
+      oriana: hasOriana ? { usdRedondeado: oUsdRedondeado, quedaDeel: oQuedaDeel, extraUsd: oExtraUsd } : null,
+      totalExtraUsd,
+      isUpdate,
+      userId: ctx.from.id,
+      createdAt: Date.now(),
+    });
+
+    // Construir preview
+    let text =
+      `💱 *Cotización ${MESES_CORTO[month - 1]} ${year}*\n\n` +
+      `TC: $${tc.toLocaleString('es-AR')}\n\n` +
+      `*Moises:*\n` +
+      `• Salario: ${fmtMonto(inc.moisesSalaryUsd, 'USD')}\n` +
+      `• Salario ARS: ${fmtMonto(inc.moisesSalaryArs, 'ARS')}\n` +
+      `• USD exacto: ${fmtMonto(mUsdExacto, 'USD')}\n` +
+      `• USD a cambiar: ${fmtMonto(mUsdRedondeado, 'USD')} (redondeado ↑50)\n` +
+      `• Queda en Deel: ${fmtMonto(mQuedaDeel, 'USD')}\n`;
+
+    if (mExtraUsd > 0.01) {
+      text += `• Extra: ${fmtMonto(mExtraUsd, 'USD')}\n`;
+    }
+
+    if (hasOriana) {
+      text += `\n*Oriana:*\n` +
+        `• Salario: ${fmtMonto(inc.orianaSalaryUsd, 'USD')}\n` +
+        `• Salario ARS: ${fmtMonto(inc.orianaSalaryArs, 'ARS')}\n` +
+        `• USD exacto: ${fmtMonto(oUsdExacto, 'USD')}\n` +
+        `• USD a cambiar: ${fmtMonto(oUsdRedondeado, 'USD')} (redondeado ↑50)\n` +
+        `• Queda en Deel: ${fmtMonto(oQuedaDeel, 'USD')}\n`;
+
+      if (oExtraUsd > 0.01) {
+        text += `• Extra: ${fmtMonto(oExtraUsd, 'USD')}\n`;
+      }
+    }
+
+    if (totalExtraUsd > 0.01) {
+      text += `\n📝 Extra total: ${fmtMonto(totalExtraUsd, 'USD')} (se registra como transacción)\n`;
+    }
+
+    if (isUpdate) {
+      text += '\n⚠️ Ya hay ingresos registrados para este mes. Se van a actualizar los datos anteriores.';
+      text += '\n\n¿Actualizar ingresos del mes?';
+    } else {
+      text += '\n¿Registrar ingresos del mes?';
+    }
+
+    const keyboard = new InlineKeyboard()
+      .text(isUpdate ? '✅ Actualizar' : '✅ Registrar', `cotiz_ok:${cotizId}`)
+      .text('❌ Cancelar', `cotiz_no:${cotizId}`);
+
+    await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: keyboard });
+  } catch (error) {
+    console.error('Error en /cotizacion:', error.message);
+    ctx.reply('Error procesando la cotización. Revisá los logs.');
+  }
+});
+
+// ============================================
+// MENSAJE DE TEXTO — parsear como transaccion
+// ============================================
+
+bot.on('message:text', async (ctx) => {
+  try {
+    // Interceptar si el usuario está ajustando monto de cuota (con interés)
+    const cuotaEdit = [...pendingCuotaEdit.entries()].find(
+      ([_, v]) => v.userId === ctx.from.id && v.waitingForAmount && Date.now() - v.createdAt < TX_TTL
+    );
+    if (cuotaEdit) {
+      const [editId, editData] = cuotaEdit;
+      const input = ctx.message.text.trim();
+      let nuevoMonto;
+      if (/^\d{1,3}(\.\d{3})+$/.test(input)) {
+        nuevoMonto = parseFloat(input.replace(/\./g, ''));
+      } else if (/^\d+,\d+$/.test(input)) {
+        nuevoMonto = parseFloat(input.replace(',', '.'));
+      } else {
+        nuevoMonto = parseFloat(input);
+      }
+      if (!nuevoMonto || nuevoMonto <= 0) {
+        return ctx.reply('Monto inválido. Enviá un número.');
+      }
+      await updateCuotaMonto(editData.cuotaRow, nuevoMonto);
+      const montoAnterior = editData.montoCuota;
+      pendingCuotaEdit.delete(editId);
+      return ctx.reply(
+        `✅ Monto de cuota actualizado: ${fmtMonto(montoAnterior, editData.moneda)} → ${fmtMonto(nuevoMonto, editData.moneda)}`
+      );
+    }
+
+    // Interceptar si el usuario está editando un monto de gasto fijo o cuota
+    const editState = pendingFixedEdit.get(ctx.from.id);
+    if (editState && Date.now() - editState.createdAt < TX_TTL) {
+      const pending = pendingFijos.get(editState.fijoId);
+      if (pending) {
+        const input = ctx.message.text.trim();
+        let nuevoMonto;
+        if (/^\d{1,3}(\.\d{3})+$/.test(input)) {
+          nuevoMonto = parseFloat(input.replace(/\./g, ''));
+        } else if (/^\d+,\d+$/.test(input)) {
+          nuevoMonto = parseFloat(input.replace(',', '.'));
+        } else {
+          nuevoMonto = parseFloat(input);
+        }
+
+        if (!nuevoMonto || nuevoMonto <= 0) {
+          return ctx.reply('Monto inválido. Enviá un número.');
+        }
+
+        let descripcion, montoAnterior, moneda;
+        const cuotasArr = pending.cuotas || [];
+
+        if (editState.isCuota) {
+          // Editar monto de cuota
+          const cuota = cuotasArr[editState.gastoIndex - pending.gastos.length];
+          montoAnterior = cuota.montoCuota;
+          cuota.montoCuota = nuevoMonto;
+          descripcion = cuota.descripcion;
+          moneda = cuota.moneda;
+          await updateCuotaMonto(cuota.row, nuevoMonto);
+        } else {
+          // Editar monto de gasto fijo
+          const gasto = pending.gastos[editState.gastoIndex];
+          montoAnterior = gasto.montoEstimado;
+          gasto.montoEstimado = nuevoMonto;
+          descripcion = gasto.descripcion;
+          moneda = gasto.moneda;
+          await updateGastoFijoMonto(gasto.row, nuevoMonto);
+        }
+
+        pendingFixedEdit.delete(ctx.from.id);
+
+        const keyboard = new InlineKeyboard()
+          .text('✅ Registrar todos', `fijos_ok:${editState.fijoId}`)
+          .row()
+          .text('✏️ Editar monto', `fijos_edit:${editState.fijoId}`)
+          .text('❌ Cancelar', `fijos_no:${editState.fijoId}`);
+
+        const listText = cuotasArr.length > 0
+          ? buildFijosAndCuotasText(pending.gastos, cuotasArr)
+          : buildFijosText(pending.gastos);
+
+        const text = listText +
+          `\n\n✅ ${descripcion}: ${fmtMonto(montoAnterior, moneda)} → ${fmtMonto(nuevoMonto, moneda)}`;
+
+        return ctx.reply(text, { parse_mode: 'Markdown', reply_markup: keyboard });
+      }
+      pendingFixedEdit.delete(ctx.from.id);
+    }
+
+    const categories = await getCategories();
+    const tx = parseTransaction(ctx.message.text, ctx.from.id, categories, config);
+
+    if (!tx) {
+      return ctx.reply(
+        'No pude interpretar ese mensaje.\n\n' +
+        'Enviá algo como: uber 3500\n' +
+        'O: super 15000 compartido'
+      );
+    }
+
+    cleanMap(pendingTx);
+    const txId = ++txCounter;
+
+    // Flujo especial para compras en cuotas
+    if (tx.cuotas) {
+      const montoCuota = Math.round(tx.monto / tx.cuotas);
+      pendingTx.set(txId, { ...tx, montoCuota, userId: ctx.from.id, createdAt: Date.now() });
+
+      const preview =
+        `*Nueva compra en cuotas*\n\n` +
+        `📅 ${tx.fecha}\n` +
+        `📋 ${tx.descripcion}\n` +
+        `🏷️ ${tx.categoria}\n` +
+        `💰 ${formatAmount(tx.monto, tx.moneda)} → ${tx.cuotas} cuotas de ${formatAmount(montoCuota, tx.moneda)}\n` +
+        `👤 ${tx.tipo}\n` +
+        `🙋 Pagado por: ${tx.pagadoPor}` +
+        (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '') +
+        `\n\n💳 Elegí tarjeta:`;
+
+      const userCards = config.tarjetas[ctx.from.id] || [];
+      const keyboard = new InlineKeyboard();
+      for (let i = 0; i < userCards.length; i++) {
+        keyboard.text(`💳 ${userCards[i]}`, `cuota_card_${i}_${txId}`);
+        if (i % 2 === 1) keyboard.row();
+      }
+      if (userCards.length % 2 === 1) keyboard.row();
+      keyboard.text('❌ Cancelar', `tx_no:${txId}`);
+
+      return ctx.reply(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
+    }
+
+    // Flujo normal (sin cuotas)
+    pendingTx.set(txId, { ...tx, userId: ctx.from.id, createdAt: Date.now() });
+
+    const preview =
+      `*Nueva transacción*\n\n` +
+      `📅 ${tx.fecha} ${tx.hora}\n` +
+      `📋 ${tx.descripcion}\n` +
+      `🏷️ ${tx.categoria}\n` +
+      `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+      `💳 ${tx.metodoPago === 'Tarjeta' ? 'Elegí tarjeta ↓' : tx.metodoPago}\n` +
+      `👤 ${tx.tipo}\n` +
+      `🙋 Pagado por: ${tx.pagadoPor}` +
+      (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '');
+
+    let keyboard;
+    if (tx.metodoPago === 'Tarjeta') {
+      const userCards = config.tarjetas[ctx.from.id] || [];
+      keyboard = new InlineKeyboard();
+      for (let i = 0; i < userCards.length; i++) {
+        keyboard.text(`💳 ${userCards[i]}`, `card_${i}_${txId}`);
+        if (i % 2 === 1) keyboard.row();
+      }
+      if (userCards.length % 2 === 1) keyboard.row();
+      keyboard.text('❌ Cancelar', `tx_no:${txId}`);
+    } else {
+      keyboard = new InlineKeyboard()
+        .text('✅ Confirmar', `tx_ok:${txId}`)
+        .text('❌ Cancelar', `tx_no:${txId}`);
+    }
+
+    await ctx.reply(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
+  } catch (error) {
+    console.error('Error procesando mensaje:', error.message);
+    ctx.reply('Error procesando el mensaje. Revisá los logs.');
+  }
+});
+
+// ============================================
+// CALLBACKS — Transacciones
+// ============================================
+
+bot.callbackQuery(/^tx_ok:(\d+)$/, async (ctx) => {
+  const txId = parseInt(ctx.match[1]);
+  const tx = pendingTx.get(txId);
+
+  if (!tx) return ctx.answerCallbackQuery({ text: 'Transacción expirada.' });
+  if (ctx.from.id !== tx.userId) return ctx.answerCallbackQuery({ text: 'Solo quien registró puede confirmar.' });
+
+  pendingTx.delete(txId);
+
+  try {
+    await appendTransaction(tx);
+    await ctx.editMessageText(
+      `✅ *Guardada*\n\n` +
+      `📋 ${tx.descripcion}\n` +
+      `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+      `🏷️ ${tx.categoria}`,
+      { parse_mode: 'Markdown' }
+    );
+    await ctx.answerCallbackQuery({ text: 'Guardada en el Sheet' });
+  } catch (error) {
+    console.error('Error guardando transacción:', error.message);
+    await ctx.editMessageText('❌ Error guardando en Google Sheets. Revisá los logs.');
+    await ctx.answerCallbackQuery({ text: 'Error al guardar' });
+  }
+});
+
+// Seleccion de tarjeta especifica (confirma + setea metodo)
+bot.callbackQuery(/^card_(\d+)_(\d+)$/, async (ctx) => {
+  const cardIdx = parseInt(ctx.match[1]);
+  const txId = parseInt(ctx.match[2]);
+  const tx = pendingTx.get(txId);
+
+  if (!tx) return ctx.answerCallbackQuery({ text: 'Transacción expirada.' });
+  if (ctx.from.id !== tx.userId) return ctx.answerCallbackQuery({ text: 'Solo quien registró puede confirmar.' });
+
+  const userCards = config.tarjetas[ctx.from.id] || [];
+  const cardName = userCards[cardIdx];
+  if (!cardName) return ctx.answerCallbackQuery({ text: 'Tarjeta no encontrada.' });
+
+  tx.metodoPago = cardName;
+  pendingTx.delete(txId);
+
+  try {
+    await appendTransaction(tx);
+    await ctx.editMessageText(
+      `✅ *Guardada*\n\n` +
+      `📋 ${tx.descripcion}\n` +
+      `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+      `🏷️ ${tx.categoria}\n` +
+      `💳 ${cardName}`,
+      { parse_mode: 'Markdown' }
+    );
+    await ctx.answerCallbackQuery({ text: `Guardada — ${cardName}` });
+  } catch (error) {
+    console.error('Error guardando transacción:', error.message);
+    await ctx.editMessageText('❌ Error guardando en Google Sheets. Revisá los logs.');
+    await ctx.answerCallbackQuery({ text: 'Error al guardar' });
+  }
+});
+
+// Seleccion de tarjeta para compra en cuotas (guarda en hoja Cuotas, no Transacciones)
+bot.callbackQuery(/^cuota_card_(\d+)_(\d+)$/, async (ctx) => {
+  const cardIdx = parseInt(ctx.match[1]);
+  const txId = parseInt(ctx.match[2]);
+  const tx = pendingTx.get(txId);
+
+  if (!tx) return ctx.answerCallbackQuery({ text: 'Transacción expirada.' });
+  if (ctx.from.id !== tx.userId) return ctx.answerCallbackQuery({ text: 'Solo quien registró puede confirmar.' });
+
+  const userCards = config.tarjetas[ctx.from.id] || [];
+  const cardName = userCards[cardIdx];
+  if (!cardName) return ctx.answerCallbackQuery({ text: 'Tarjeta no encontrada.' });
+
+  pendingTx.delete(txId);
+
+  try {
+    const now = getNowBA();
+    const cierreDay = config.cierreTarjetas[cardName] || 0;
+    const primera = calcPrimeraCuota(now, cierreDay);
+    const primeraCuotaStr = formatMesAnio(primera.month, primera.year);
+    const montoCuota = tx.montoCuota || Math.round(tx.monto / tx.cuotas);
+
+    await appendCuota({
+      descripcion: tx.descripcion,
+      categoria: tx.categoria,
+      montoTotal: tx.monto,
+      cuotasTotales: tx.cuotas,
+      montoCuota,
+      moneda: tx.moneda,
+      tarjeta: cardName,
+      tipo: tx.tipo,
+      pagadoPor: tx.pagadoPor,
+      fechaCompra: tx.fecha,
+      primeraCuota: primeraCuotaStr,
+    });
+
+    const primeraMesLabel = MESES_CORTO[primera.month - 1];
+    // Calcular ultima cuota
+    let ultMes = primera.month + tx.cuotas - 2;
+    let ultAnio = primera.year;
+    while (ultMes > 12) { ultMes -= 12; ultAnio++; }
+    while (ultMes < 1) { ultMes += 12; ultAnio--; }
+    const ultimaMesLabel = MESES_CORTO[ultMes - 1];
+
+    const confirmText =
+      `✅ *Cuotas registradas*\n\n` +
+      `📋 ${tx.descripcion}\n` +
+      `💰 ${tx.cuotas} cuotas de ${formatAmount(montoCuota, tx.moneda)}\n` +
+      `💳 ${cardName}\n` +
+      `📅 ${primeraMesLabel} ${primera.year} → ${ultimaMesLabel} ${ultAnio}`;
+
+    // Guardar referencia para posible ajuste de monto
+    const cuotaConfirmId = ++txCounter;
+    const allCuotas = await getCuotas();
+    const lastCuota = allCuotas[allCuotas.length - 1];
+
+    pendingCuotaEdit.set(cuotaConfirmId, {
+      cuotaRow: lastCuota ? lastCuota.row : null,
+      montoCuota,
+      moneda: tx.moneda,
+      userId: ctx.from.id,
+      createdAt: Date.now(),
+    });
+
+    const keyboard = new InlineKeyboard()
+      .text('✅ OK', `cuota_done:${cuotaConfirmId}`)
+      .text('💰 Ajustar monto cuota', `cuota_adjust:${cuotaConfirmId}`);
+
+    await ctx.editMessageText(confirmText, { parse_mode: 'Markdown', reply_markup: keyboard });
+    await ctx.answerCallbackQuery({ text: `Cuotas guardadas — ${cardName}` });
+  } catch (error) {
+    console.error('Error guardando cuotas:', error.message);
+    await ctx.editMessageText('❌ Error guardando las cuotas. Revisá los logs.');
+    await ctx.answerCallbackQuery({ text: 'Error al guardar' });
+  }
+});
+
+// Confirmar cuota sin ajuste (remueve botones)
+bot.callbackQuery(/^cuota_done:(\d+)$/, async (ctx) => {
+  const id = parseInt(ctx.match[1]);
+  pendingCuotaEdit.delete(id);
+  const currentText = ctx.callbackQuery.message?.text || '';
+  await ctx.editMessageText(currentText, { parse_mode: 'Markdown' });
+  await ctx.answerCallbackQuery({ text: 'Listo' });
+});
+
+// Iniciar ajuste de monto cuota (para compras con interés)
+bot.callbackQuery(/^cuota_adjust:(\d+)$/, async (ctx) => {
+  const id = parseInt(ctx.match[1]);
+  const pending = pendingCuotaEdit.get(id);
+
+  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'Solo quien registró puede ajustar.' });
+
+  pending.waitingForAmount = true;
+
+  await ctx.editMessageText(
+    `💰 *Ajustar monto de cuota*\n\n` +
+    `Monto actual por cuota: ${fmtMonto(pending.montoCuota, pending.moneda)}\n\n` +
+    `Enviá el nuevo monto por cuota:`,
+    { parse_mode: 'Markdown' }
+  );
+  await ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery(/^tx_no:(\d+)$/, async (ctx) => {
+  const txId = parseInt(ctx.match[1]);
+  const tx = pendingTx.get(txId);
+
+  if (!tx) return ctx.answerCallbackQuery({ text: 'Ya fue cancelada.' });
+  if (ctx.from.id !== tx.userId) return ctx.answerCallbackQuery({ text: 'Solo quien registró puede cancelar.' });
+
+  pendingTx.delete(txId);
+  await ctx.editMessageText('❌ Transacción cancelada.');
+  await ctx.answerCallbackQuery({ text: 'Cancelada' });
+});
+
+// ============================================
+// CALLBACKS — Borrado de transacciones
+// ============================================
+
+// Seleccion de cual borrar
+bot.callbackQuery(/^del_pick:(\d+):(\d+)$/, async (ctx) => {
+  const delId = parseInt(ctx.match[1]);
+  const txIdx = parseInt(ctx.match[2]);
+  const pending = pendingDeletes.get(delId);
+
+  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'Solo quien pidió borrar puede elegir.' });
+
+  const tx = pending.transactions[txIdx];
+  if (!tx) return ctx.answerCallbackQuery({ text: 'Transacción no encontrada.' });
+
+  // Guardar la seleccion para confirmacion
+  const confirmId = ++txCounter;
+  pendingDeletes.set(confirmId, {
+    transaction: tx,
+    originalDelId: delId,
+    userId: ctx.from.id,
+    createdAt: Date.now(),
+  });
+
+  const text =
+    `🗑️ *¿Borrar esta transacción?*\n\n` +
+    `📅 ${tx.fecha}\n` +
+    `📋 ${tx.descripcion}\n` +
+    `💰 ${fmtMonto(tx.monto, tx.moneda)}\n` +
+    `🏷️ ${tx.categoria}`;
+
+  const keyboard = new InlineKeyboard()
+    .text('✅ Borrar', `del_ok:${confirmId}`)
+    .text('❌ Cancelar', `del_cancel:${confirmId}`);
+
+  await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: keyboard });
+  await ctx.answerCallbackQuery();
+});
+
+// Confirmar borrado
+bot.callbackQuery(/^del_ok:(\d+)$/, async (ctx) => {
+  const confirmId = parseInt(ctx.match[1]);
+  const pending = pendingDeletes.get(confirmId);
+
+  if (!pending || !pending.transaction) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'Solo quien pidió borrar puede confirmar.' });
+
+  const tx = pending.transaction;
+  pendingDeletes.delete(confirmId);
+  if (pending.originalDelId) pendingDeletes.delete(pending.originalDelId);
+
+  try {
+    await deleteTransaction(tx.row);
+    await ctx.editMessageText(
+      `✅ *Borrada*\n\n` +
+      `📋 ${tx.descripcion} — ${fmtMonto(tx.monto, tx.moneda)}`,
+      { parse_mode: 'Markdown' }
+    );
+    await ctx.answerCallbackQuery({ text: 'Transacción borrada' });
+  } catch (error) {
+    console.error('Error borrando transacción:', error.message);
+    await ctx.editMessageText('❌ Error borrando la transacción. Revisá los logs.');
+    await ctx.answerCallbackQuery({ text: 'Error al borrar' });
+  }
+});
+
+// Cancelar borrado (desde seleccion o confirmacion)
+bot.callbackQuery(/^del_(no|cancel):(\d+)$/, async (ctx) => {
+  const delId = parseInt(ctx.match[2]);
+  pendingDeletes.delete(delId);
+  await ctx.editMessageText('❌ Borrado cancelado.');
+  await ctx.answerCallbackQuery({ text: 'Cancelado' });
+});
+
+// ============================================
+// CALLBACKS — Gastos fijos
+// ============================================
+
+// Helper: filtrar gastos fijos relevantes para un usuario
+// Moises ve Individual Moises + Compartido, Oriana ve Individual Oriana + Compartido
+// Comparación case-insensitive y tolerante a variantes. Items sin tipo → visibles para ambos.
+function filterGastosForUser(gastos, userId) {
+  const esMoises = userId === config.moisesId;
+  return gastos.filter(g => {
+    const tipo = (g.tipo || '').toLowerCase().trim();
+    if (tipo.includes('moises')) return esMoises;
+    if (tipo.includes('oriana')) return !esMoises;
+    // Compartido, vacío, o desconocido → visible para ambos
+    return true;
+  });
+}
+
+// Helper: derivar pagadoPor y splits segun tipo de gasto
+function derivePagador(tipo, userId) {
+  const tipoLower = (tipo || '').toLowerCase().trim();
+  if (tipoLower.includes('moises')) return { pagadoPor: 'Moises', splitMoises: 100, splitOriana: 0 };
+  if (tipoLower.includes('oriana')) return { pagadoPor: 'Oriana', splitMoises: 0, splitOriana: 100 };
+  const pagadoPor = userId === config.moisesId ? 'Moises' : 'Oriana';
+  return { pagadoPor, splitMoises: 50, splitOriana: 50 };
+}
+
+// Helper: construir texto del listado de gastos fijos pendientes
+function buildFijosText(gastos) {
+  let text = `📋 *Gastos fijos pendientes*\n\n`;
+  for (let i = 0; i < gastos.length; i++) {
+    const g = gastos[i];
+    text += `${i + 1}. ${g.descripcion} — ${fmtMonto(g.montoEstimado, g.moneda)} (${g.metodoPago})\n`;
+  }
+  text += `\nTotal: ${gastos.length} gastos fijos`;
+  return text;
+}
+
+// Registrar todos los gastos fijos pendientes
+bot.callbackQuery(/^fijos_ok:(\d+)$/, async (ctx) => {
+  const fijoId = parseInt(ctx.match[1]);
+  const pending = pendingFijos.get(fijoId);
+
+  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'Solo quien inició puede confirmar.' });
+
+  pendingFijos.delete(fijoId);
+  pendingFixedEdit.delete(ctx.from.id);
+
+  try {
+    // Re-leer gastos fijos del Sheet para evitar duplicados
+    const gastosActuales = await getGastosFijos();
+    const registradosAhora = new Set(
+      gastosActuales.filter(g => g.registrado).map(g => g.descripcion)
+    );
+
+    const aRegistrar = pending.gastos.filter(g => !registradosAhora.has(g.descripcion));
+    const yaRegistrados = pending.gastos.length - aRegistrar.length;
+
+    // Re-leer cuotas para evitar duplicados en compartidos
+    const cuotasDelMes = pending.cuotas || [];
+    let cuotasARegistrar = cuotasDelMes;
+    if (cuotasDelMes.length > 0) {
+      const { month, year } = getNowBA();
+      const cuotasActuales = await getCuotas();
+      const pendientesAhora = getPendingCuotasForMonth(cuotasActuales, month, year);
+      const pendientesRows = new Set(pendientesAhora.map(c => c.row));
+      cuotasARegistrar = cuotasDelMes.filter(c => pendientesRows.has(c.row));
+    }
+
+    if (aRegistrar.length === 0 && cuotasARegistrar.length === 0) {
+      let text = '✅ Todo ya fue registrado';
+      if (yaRegistrados > 0) text += ` (${yaRegistrados} por el otro usuario)`;
+      await ctx.editMessageText(text + '.');
+      return ctx.answerCallbackQuery({ text: 'Ya estaban registrados' });
+    }
+
+    const now = new Date();
+    const options = { timeZone: 'America/Argentina/Buenos_Aires' };
+    const fechaStr = now.toLocaleDateString('es-AR', { ...options, day: '2-digit', month: '2-digit', year: 'numeric' });
+    const horaStr = now.toLocaleTimeString('es-AR', { ...options, hour: '2-digit', minute: '2-digit', hour12: false });
+
+    // Registrar gastos fijos
+    for (const g of aRegistrar) {
+      const { pagadoPor, splitMoises, splitOriana } = derivePagador(g.tipo, pending.userId);
+      let metodo = g.metodoPago;
+      if (metodo === 'Tarjeta') {
+        const userCards = config.tarjetas[pending.userId] || [];
+        metodo = userCards[0] || 'Tarjeta';
+      }
+      await appendTransaction({
+        fecha: fechaStr, hora: horaStr,
+        descripcion: g.descripcion, categoria: g.categoria,
+        monto: g.montoEstimado, moneda: g.moneda, metodoPago: metodo,
+        tipo: g.tipo, pagadoPor, splitMoises, splitOriana,
+        notas: 'Gasto fijo',
+      });
+    }
+
+    // Registrar cuotas
+    for (const c of cuotasARegistrar) {
+      const { pagadoPor, splitMoises, splitOriana } = derivePagador(c.tipo, pending.userId);
+      await appendTransaction({
+        fecha: fechaStr, hora: horaStr,
+        descripcion: c.descripcion, categoria: c.categoria,
+        monto: c.montoCuota, moneda: c.moneda, metodoPago: c.tarjeta,
+        tipo: c.tipo, pagadoPor, splitMoises, splitOriana,
+        notas: `Cuota ${c.cuotaNumero}/${c.cuotasTotales}`,
+      });
+      await updateCuotaRegistradas(c.row, c.cuotaNumero);
+    }
+
+    // Mensaje de confirmación
+    const totalRegistrados = aRegistrar.length + cuotasARegistrar.length;
+    let text = `✅ *${totalRegistrados} registrados*\n\n`;
+
+    if (aRegistrar.length > 0) {
+      text += '*Gastos fijos:*\n';
+      for (const g of aRegistrar) {
+        text += `• ${g.descripcion} — ${fmtMonto(g.montoEstimado, g.moneda)}\n`;
+      }
+    }
+    if (cuotasARegistrar.length > 0) {
+      if (aRegistrar.length > 0) text += '\n';
+      text += '*Cuotas:*\n';
+      for (const c of cuotasARegistrar) {
+        text += `• 💳 ${c.descripcion} (Cuota ${c.cuotaNumero}/${c.cuotasTotales}) — ${fmtMonto(c.montoCuota, c.moneda)}\n`;
+      }
+    }
+    if (yaRegistrados > 0) {
+      text += `\nℹ️ ${yaRegistrados} ya habían sido registrados por el otro usuario.`;
+    }
+
+    await ctx.editMessageText(text, { parse_mode: 'Markdown' });
+    await ctx.answerCallbackQuery({ text: 'Registrados' });
+  } catch (error) {
+    console.error('Error registrando gastos fijos:', error.message);
+    await ctx.editMessageText('❌ Error registrando. Revisá los logs.');
+    await ctx.answerCallbackQuery({ text: 'Error al registrar' });
+  }
+});
+
+// Entrar en modo edicion de monto
+bot.callbackQuery(/^fijos_edit:(\d+)$/, async (ctx) => {
+  const fijoId = parseInt(ctx.match[1]);
+  const pending = pendingFijos.get(fijoId);
+
+  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'Solo quien inició puede editar.' });
+
+  const cuotasArr = pending.cuotas || [];
+  const totalItems = pending.gastos.length + cuotasArr.length;
+
+  const keyboard = new InlineKeyboard();
+  for (let i = 0; i < totalItems; i++) {
+    keyboard.text(`${i + 1}`, `fijos_pick:${fijoId}:${i}`);
+  }
+  keyboard.row().text('⬅️ Volver', `fijos_back:${fijoId}`);
+
+  const text = (cuotasArr.length > 0
+    ? buildFijosAndCuotasText(pending.gastos, cuotasArr)
+    : buildFijosText(pending.gastos)) + '\n\n✏️ *¿Cuál querés editar?*';
+
+  await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: keyboard });
+  await ctx.answerCallbackQuery();
+});
+
+// Seleccionar gasto fijo o cuota para editar monto
+bot.callbackQuery(/^fijos_pick:(\d+):(\d+)$/, async (ctx) => {
+  const fijoId = parseInt(ctx.match[1]);
+  const idx = parseInt(ctx.match[2]);
+  const pending = pendingFijos.get(fijoId);
+
+  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'Solo quien inició puede editar.' });
+
+  const gastosCount = pending.gastos.length;
+  const cuotasArr = pending.cuotas || [];
+  const isCuota = idx >= gastosCount;
+
+  let descripcion, monto, moneda;
+  if (isCuota) {
+    const cuota = cuotasArr[idx - gastosCount];
+    if (!cuota) return ctx.answerCallbackQuery({ text: 'Item no encontrado.' });
+    descripcion = cuota.descripcion;
+    monto = cuota.montoCuota;
+    moneda = cuota.moneda;
+  } else {
+    const gasto = pending.gastos[idx];
+    if (!gasto) return ctx.answerCallbackQuery({ text: 'Gasto no encontrado.' });
+    descripcion = gasto.descripcion;
+    monto = gasto.montoEstimado;
+    moneda = gasto.moneda;
+  }
+
+  pendingFixedEdit.set(ctx.from.id, {
+    fijoId,
+    gastoIndex: idx,
+    isCuota,
+    createdAt: Date.now(),
+  });
+
+  await ctx.editMessageText(
+    `✏️ *Editando: ${descripcion}*\n\n` +
+    `Monto actual: ${fmtMonto(monto, moneda)}\n\n` +
+    `Enviá el nuevo monto:`,
+    { parse_mode: 'Markdown' }
+  );
+  await ctx.answerCallbackQuery();
+});
+
+// Volver al listado desde edicion
+bot.callbackQuery(/^fijos_back:(\d+)$/, async (ctx) => {
+  const fijoId = parseInt(ctx.match[1]);
+  const pending = pendingFijos.get(fijoId);
+
+  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+
+  // Limpiar estado de edicion
+  pendingFixedEdit.delete(ctx.from.id);
+
+  const keyboard = new InlineKeyboard()
+    .text('✅ Registrar todos', `fijos_ok:${fijoId}`)
+    .row()
+    .text('✏️ Editar monto', `fijos_edit:${fijoId}`)
+    .text('❌ Cancelar', `fijos_no:${fijoId}`);
+
+  const cuotasArr = pending.cuotas || [];
+  const listText = cuotasArr.length > 0
+    ? buildFijosAndCuotasText(pending.gastos, cuotasArr)
+    : buildFijosText(pending.gastos);
+  await ctx.editMessageText(listText, { parse_mode: 'Markdown', reply_markup: keyboard });
+  await ctx.answerCallbackQuery();
+});
+
+// Cancelar registro de gastos fijos
+bot.callbackQuery(/^fijos_no:(\d+)$/, async (ctx) => {
+  const fijoId = parseInt(ctx.match[1]);
+  pendingFijos.delete(fijoId);
+  pendingFixedEdit.delete(ctx.from.id);
+  await ctx.editMessageText('❌ Registro de gastos fijos cancelado.');
+  await ctx.answerCallbackQuery({ text: 'Cancelado' });
+});
+
+// ============================================
+// CALLBACKS — Ingresos
+// ============================================
+
+// Confirmar ingreso extra
+bot.callbackQuery(/^inc_ok:(\d+)$/, async (ctx) => {
+  const incId = parseInt(ctx.match[1]);
+  const pending = pendingIncome.get(incId);
+
+  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'Solo quien registró puede confirmar.' });
+
+  pendingIncome.delete(incId);
+
+  try {
+    const current = await getCurrentIncome(pending.month);
+    const currentVal = pending.quien === 'moises' ? current.moises : current.oriana;
+    const newVal = currentVal + pending.monto;
+    await updateIncome(pending.month, pending.quien, newVal);
+
+    await ctx.editMessageText(
+      `✅ *Ingreso registrado*\n\n` +
+      `💵 ${fmtMonto(pending.monto, pending.moneda)} — ${pending.descripcion}\n` +
+      `Total ${MESES_CORTO[pending.month - 1]}: ${fmtMonto(newVal, pending.moneda)}`,
+      { parse_mode: 'Markdown' }
+    );
+    await ctx.answerCallbackQuery({ text: 'Ingreso registrado' });
+  } catch (error) {
+    console.error('Error registrando ingreso:', error.message);
+    await ctx.editMessageText('❌ Error registrando el ingreso. Revisá los logs.');
+    await ctx.answerCallbackQuery({ text: 'Error al registrar' });
+  }
+});
+
+// Cancelar ingreso extra
+bot.callbackQuery(/^inc_no:(\d+)$/, async (ctx) => {
+  const incId = parseInt(ctx.match[1]);
+  pendingIncome.delete(incId);
+  await ctx.editMessageText('❌ Ingreso cancelado.');
+  await ctx.answerCallbackQuery({ text: 'Cancelado' });
+});
+
+// ============================================
+// CALLBACKS — Cotización (registro de ingresos mensual)
+// ============================================
+
+bot.callbackQuery(/^cotiz_ok:(\d+)$/, async (ctx) => {
+  const cotizId = parseInt(ctx.match[1]);
+  const pending = pendingIncome.get(cotizId);
+
+  if (!pending || pending.type !== 'cotizacion') return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'Solo quien registró puede confirmar.' });
+
+  pendingIncome.delete(cotizId);
+  const inc = config.income;
+  const accion = pending.isUpdate ? 'actualizados' : 'registrados';
+  const m = pending.moises;
+  const o = pending.oriana;
+
+  try {
+    // 1. Si es actualización, borrar las transacciones "Extra cotización" anteriores
+    if (pending.isUpdate) {
+      const transactions = await getMonthlyTransactions(pending.month, pending.year);
+      const oldExtras = transactions.filter(tx => tx.descripcion.startsWith('Extra cotización'));
+      for (const old of oldExtras) {
+        await deleteTransaction(old.row);
+      }
+    }
+
+    // 2. Registrar/actualizar ingresos en hoja Ingresos (values.update sobreescribe)
+    const moisesData = {
+      salario: inc.moisesSalaryUsd,
+      deelKeep: m.quedaDeel,
+      transfer: m.usdRedondeado,
+    };
+    const orianaData = o ? {
+      salario: inc.orianaSalaryUsd,
+      deelKeep: o.quedaDeel,
+      transfer: o.usdRedondeado,
+    } : null;
+
+    await registerIncome(pending.month, moisesData, orianaData);
+
+    // 3. Escribir TC en la columna E de Ingresos (ambos usan el mismo TC)
+    const moisesRow = pending.month + 2;
+    const orianaRow = pending.month + 18;
+    const sheetsApi = require('./sheets').sheets;
+
+    const tcRequests = [
+      sheetsApi.spreadsheets.values.update({
+        spreadsheetId: config.sheetId,
+        range: `Ingresos!E${moisesRow}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[pending.tc]] },
+      }),
+    ];
+    if (o) {
+      tcRequests.push(sheetsApi.spreadsheets.values.update({
+        spreadsheetId: config.sheetId,
+        range: `Ingresos!E${orianaRow}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[pending.tc]] },
+      }));
+    }
+    await Promise.all(tcRequests);
+
+    // 4. Registrar extra USD como transacción si corresponde
+    let extraMsg = '';
+    if (pending.totalExtraUsd > 0.01) {
+      const now = new Date();
+      const options = { timeZone: 'America/Argentina/Buenos_Aires' };
+      const fechaStr = now.toLocaleDateString('es-AR', { ...options, day: '2-digit', month: '2-digit', year: 'numeric' });
+      const horaStr = now.toLocaleTimeString('es-AR', { ...options, hour: '2-digit', minute: '2-digit', hour12: false });
+
+      await appendTransaction({
+        fecha: fechaStr,
+        hora: horaStr,
+        descripcion: `Extra cotización ${MESES_CORTO[pending.month - 1]}`,
+        categoria: 'Otros',
+        monto: Math.round(pending.totalExtraUsd * 100) / 100,
+        moneda: 'USD',
+        metodoPago: 'Deel USD',
+        tipo: 'Compartido',
+        pagadoPor: 'Moises',
+        splitMoises: 50,
+        splitOriana: 50,
+        notas: `TC ${pending.tc}`,
+      });
+      extraMsg = `\n📝 Extra total ${fmtMonto(pending.totalExtraUsd, 'USD')} registrado como transacción`;
+    }
+
+    // 5. Mensaje de confirmación (detallado para ambos)
+    let confirmText =
+      `✅ *Ingresos de ${MESES_CORTO[pending.month - 1]} ${accion}*\n` +
+      `TC: $${pending.tc.toLocaleString('es-AR')}\n\n` +
+      `*Moises:*\n` +
+      `• Salario: ${fmtMonto(inc.moisesSalaryUsd, 'USD')}\n` +
+      `• USD a cambiar: ${fmtMonto(m.usdRedondeado, 'USD')}\n` +
+      `• Queda en Deel: ${fmtMonto(m.quedaDeel, 'USD')}\n`;
+
+    if (o) {
+      confirmText +=
+        `\n*Oriana:*\n` +
+        `• Salario: ${fmtMonto(inc.orianaSalaryUsd, 'USD')}\n` +
+        `• USD a cambiar: ${fmtMonto(o.usdRedondeado, 'USD')}\n` +
+        `• Queda en Deel: ${fmtMonto(o.quedaDeel, 'USD')}\n`;
+    }
+
+    confirmText += extraMsg;
+
+    await ctx.editMessageText(confirmText, { parse_mode: 'Markdown' });
+
+    // 6. Notificar al otro usuario con el mismo detalle
+    const otherId = ctx.from.id === config.moisesId ? config.orianaId : config.moisesId;
+    await bot.api.sendMessage(otherId, confirmText, { parse_mode: 'Markdown' });
+
+    await ctx.answerCallbackQuery({ text: `Ingresos ${accion}` });
+  } catch (error) {
+    console.error('Error registrando cotización:', error.message);
+    await ctx.editMessageText('❌ Error registrando los ingresos. Revisá los logs.');
+    await ctx.answerCallbackQuery({ text: 'Error al registrar' });
+  }
+});
+
+bot.callbackQuery(/^cotiz_no:(\d+)$/, async (ctx) => {
+  const cotizId = parseInt(ctx.match[1]);
+  pendingIncome.delete(cotizId);
+  await ctx.editMessageText('❌ Cotización cancelada.');
+  await ctx.answerCallbackQuery({ text: 'Cancelado' });
+});
+
+// ============================================
+// RECORDATORIO DE INGRESOS AL INICIAR
+// ============================================
+
+async function checkIncomeReminder() {
+  const inc = config.income;
+  // Si no hay defaults configurados, no recordar
+  if (!inc.moisesSalaryUsd || !inc.moisesSalaryArs) return;
+
+  try {
+    const { month, year } = getNowBA();
+    const status = await getIncomeStatus(month);
+
+    // Si ya estan registrados, no recordar
+    if (status.moises) return;
+
+    const text =
+      `💰 Recordá registrar los ingresos de ${MESES_CORTO[month - 1]} ${year}.\n\n` +
+      `Usá /cotizacion [monto] cuando tengas el tipo de cambio.\n` +
+      `Ejemplo: /cotizacion 1350`;
+
+    await Promise.all([
+      bot.api.sendMessage(config.moisesId, text),
+      bot.api.sendMessage(config.orianaId, text),
+    ]);
+    console.log(`Recordatorio de cotización enviado a ambos para ${MESES_CORTO[month - 1]} ${year}.`);
+  } catch (error) {
+    console.error('Error verificando ingresos:', error.message);
+  }
+}
+
+// ============================================
+// RECORDATORIO DE GASTOS FIJOS AL INICIAR
+// ============================================
+
+async function checkFixedExpensesReminder() {
+  try {
+    const { month, year } = getNowBA();
+    const [gastos, cuotas] = await Promise.all([getGastosFijos(), getCuotas()]);
+
+    const pendientes = gastos.filter(g => !g.registrado);
+    const pendientesCuotas = getPendingCuotasForMonth(cuotas, month, year);
+
+    if (pendientes.length === 0 && pendientesCuotas.length === 0) return;
+
+    const mesLabel = `${MESES_CORTO[month - 1]} ${year}`;
+
+    for (const userId of [config.moisesId, config.orianaId]) {
+      const userGastos = filterGastosForUser(pendientes, userId);
+      const userCuotas = filterCuotasForUser(pendientesCuotas, userId);
+      if (userGastos.length === 0 && userCuotas.length === 0) continue;
+
+      cleanMap(pendingFijos);
+      const fijoId = ++txCounter;
+      pendingFijos.set(fijoId, {
+        gastos: userGastos,
+        cuotas: userCuotas,
+        userId,
+        createdAt: Date.now(),
+      });
+
+      const text = userCuotas.length > 0
+        ? buildFijosAndCuotasText(userGastos, userCuotas).replace('*Gastos fijos y cuotas pendientes*', `*Pendientes — ${mesLabel}*`)
+        : `📋 *Gastos fijos pendientes — ${mesLabel}*\n\n` +
+          userGastos.map((g, i) => `${i + 1}. ${g.descripcion} — ${fmtMonto(g.montoEstimado, g.moneda)} (${g.metodoPago})`).join('\n') +
+          `\n\nTotal: ${userGastos.length} gastos fijos`;
+
+      const keyboard = new InlineKeyboard()
+        .text('✅ Registrar todos', `fijos_ok:${fijoId}`)
+        .row()
+        .text('✏️ Editar monto', `fijos_edit:${fijoId}`)
+        .text('❌ Ahora no', `fijos_no:${fijoId}`);
+
+      await bot.api.sendMessage(userId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
+    }
+
+    console.log(`Recordatorio de gastos fijos y cuotas enviado para ${mesLabel}.`);
+  } catch (error) {
+    console.error('Error verificando gastos fijos:', error.message);
+  }
+}
+
+// ============================================
+// ARRANCAR EL BOT
+// ============================================
+
+// Graceful shutdown: Railway envía SIGTERM al re-deployar
+process.once('SIGINT', () => bot.stop());
+process.once('SIGTERM', () => bot.stop());
+
+bot.start({
+  onStart: () => {
+    console.log('Bot iniciado correctamente.');
+    // Verificar ingresos y gastos fijos despues de que el bot arranque
+    setTimeout(checkIncomeReminder, 3000);
+    setTimeout(checkFixedExpensesReminder, 5000);
+  },
+});

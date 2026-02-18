@@ -1,0 +1,21 @@
+{
+  "name": "finance-bot",
+  "version": "1.0.0",
+  "description": "Bot de Telegram para finanzas personales",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "googleapis": "^171.4.0",
+    "grammy": "^1.40.0"
+  }
+}
