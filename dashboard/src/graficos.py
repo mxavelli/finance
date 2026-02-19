@@ -5,19 +5,19 @@ import plotly.graph_objects as go
 import pandas as pd
 from .formato import formato_ars, formato_usd
 
-# Paleta consistente con el Sheet
+# Paleta pastel
 COLORES = [
-    '#1a73e8',  # Azul principal
-    '#ea4335',  # Rojo
-    '#34a853',  # Verde
-    '#fbbc04',  # Amarillo/Dorado
-    '#ff6d01',  # Naranja
-    '#46bdc6',  # Teal
-    '#7baaf7',  # Azul claro
-    '#f07b72',  # Rosa
-    '#57bb8a',  # Verde claro
-    '#ffd666',  # Amarillo claro
-    '#a142f4',  # Violeta
+    '#7eb8da',  # Azul pastel
+    '#f4a7a0',  # Rosa salmón
+    '#a8d5a2',  # Verde menta
+    '#f7d794',  # Amarillo durazno
+    '#c3aed6',  # Lila
+    '#87ceeb',  # Celeste
+    '#f8b4c8',  # Rosa claro
+    '#b5ead7',  # Verde agua
+    '#ffd1a9',  # Naranja melocotón
+    '#d4a5e5',  # Violeta suave
+    '#a0d2db',  # Turquesa pastel
 ]
 
 
@@ -139,13 +139,13 @@ def grafico_presupuesto(categorias, presupuestado, real, titulo=None):
     colores_barra = []
     for p, r in zip(presupuestado, real):
         if p <= 0:
-            colores_barra.append(COLORES[0])  # Sin presupuesto → azul
+            colores_barra.append(COLORES[0])  # Sin presupuesto
         elif r / p > 1:
-            colores_barra.append('#ea4335')  # Rojo >100%
+            colores_barra.append('#f4a7a0')  # Rosa salmón >100%
         elif r / p > 0.8:
-            colores_barra.append('#fbbc04')  # Amarillo >80%
+            colores_barra.append('#f7d794')  # Durazno >80%
         else:
-            colores_barra.append('#34a853')  # Verde <80%
+            colores_barra.append('#a8d5a2')  # Verde menta <80%
 
     # Ordenar por % usado descendente
     pares = sorted(zip(categorias, real, presupuestado, colores_barra),

@@ -17,8 +17,9 @@ st.set_page_config(
 st.markdown("""<style>
     .block-container { padding-top: 1rem; padding-bottom: 1rem; }
     [data-testid="stMetric"] {
-        background: #f0f2f6; padding: 12px; border-radius: 8px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        background: #f3f0ff; padding: 12px; border-radius: 12px;
+        box-shadow: 0 2px 6px rgba(126,184,218,0.15);
+        border-left: 4px solid #c3aed6;
     }
     [data-testid="stMetric"] label { font-size: 0.8rem; }
     [data-testid="stSidebar"] { min-width: 260px; }
