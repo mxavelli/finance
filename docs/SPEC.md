@@ -13,6 +13,7 @@
 | 5. Flujo completo del bot | ✅ Completa | Consultas, borrado, ingresos automáticos |
 | 6. Dashboard y reportes | ✅ Completa | Fórmulas Dashboard, flujo financiero, resumen anual |
 | 7. Refinamiento | ⏳ En progreso | /tarjeta, /registrar_fijos, recordatorio gastos fijos |
+| 8. Dashboard Streamlit | ⏳ En progreso | Visualización de datos mobile-friendly |
 
 ---
 
@@ -90,6 +91,8 @@ El salario llega en USD a Deel y se distribuye en 3 bolsillos:
 | Primera cuota cálculo | Si compra <= cierre o cierre no configurado → mes siguiente. Si compra > cierre → mes+2. Cierre configurable por tarjeta via env vars | 2026-02-18 |
 | Cuotas integradas con fijos | /registrar\_fijos muestra gastos fijos + cuotas pendientes en una sola lista. Mismos botones de Registrar/Editar/Cancelar | 2026-02-18 |
 | Rangos sin límite fijo | Lecturas de Gastos Fijos y Cuotas usan rangos abiertos (`A2:H`, `A2:M`). Fórmulas y validaciones cubren hasta fila 101 (100 items). Función `extendSheetLimits()` para re-expandir si hace falta | 2026-02-18 |
+| Dashboard Streamlit | Single-page app con sidebar navigation. Plotly Express para gráficos touch-friendly. gspread con scope read-only. Cache 5 min con botón manual de refresh. Deploy en Streamlit Community Cloud | 2026-02-18 |
+| Deploy Bot | Railway con long polling, restart on failure, graceful shutdown (SIGTERM) | 2026-02-18 |
 | Parsing locale montos | `parseLocalNumber()` en sheets.js maneja formatos argentinos: "15.000" (punto=miles), "15.000,50", "$15.000". Usado en getGastosFijos() | 2026-02-18 |
 | Filtro por usuario robusto | `filterGastosForUser()` y `filterCuotasForUser()` usan comparación case-insensitive con `includes('moises')`/`includes('oriana')`. Items sin tipo o con tipo desconocido → visibles para ambos | 2026-02-18 |
 
@@ -98,9 +101,11 @@ El salario llega en USD a Deel y se distribuye en 3 bolsillos:
 ## Stack técnico
 
 - **Bot**: Node.js + grammY (Telegram Bot framework)
+- **Dashboard**: Streamlit + gspread + Plotly Express (Python)
 - **Spreadsheet**: Google Sheets + Google Sheets API
 - **Auth**: Google Service Account
-- **Deploy**: A definir (Railway, Render, VPS, o Google Cloud Functions)
+- **Deploy Bot**: Railway (long polling 24/7)
+- **Deploy Dashboard**: Streamlit Community Cloud (gratis)
 - **Entorno**: VSCode + Claude Code
 
 ---
@@ -429,7 +434,55 @@ cd bot && node -e "require('./src/sheets').setupCuotas()"
 
 ---
 
+## Dashboard Streamlit (Fase 8)
+
+Dashboard de visualización de datos accesible desde el celular.
+
+### Estructura
+
+```
+dashboard/
+├── app.py                 # Entry point
+├── requirements.txt       # streamlit, gspread, plotly, pandas
+├── .streamlit/
+│   ├── config.toml        # Tema visual
+│   └── secrets.toml       # Credenciales (NO en git)
+└── src/
+    ├── conexion.py        # Auth Google Sheets (read-only)
+    ├── datos.py           # Lectura de datos con cache 5 min
+    ├── graficos.py        # Gráficos Plotly mobile-friendly
+    └── formato.py         # Helpers moneda AR, fechas
+```
+
+### Secciones
+
+| Sección | Qué muestra |
+|---------|-------------|
+| Resumen del mes | Totales ARS/USD, por persona, distribución por tipo |
+| Gastos por categoría | Dona + barras, filtrable por persona |
+| Tendencias mensuales | Líneas mes a mes, top 5 categorías apiladas |
+| Balance compartido | Quién debe a quién, tabla mensual, evolución |
+| Presupuesto vs real | Barras con colores por %, progress bars |
+| Métodos de pago | Distribución por método, total tarjetas |
+| Cuotas activas | Lista con progreso, total mensual |
+| Flujo de caja | Ingresos vs gastos ARS/USD, sobrante |
+| Gastos fijos | Registrados vs pendientes, progreso |
+| Comparativo M vs O | Barras agrupadas por categoría |
+
+### Deploy
+
+```
+Streamlit Community Cloud:
+- Repo: mxavelli/finance
+- Branch: main
+- Main file: dashboard/app.py
+- Secrets: JSON Service Account + sheet_id
+```
+
+---
+
 ## Próximos pasos al retomar
 
 - **Fase 7: Refinamiento** — En progreso. Ya implementados: `/tarjeta`, `/registrar_fijos`, recordatorio gastos fijos, tarjetas de crédito específicas, cuotas de tarjeta, rangos expandidos, parsing locale, filtros robustos
-- Ideas pendientes: alertas de presupuesto, comparativas mes a mes, export, deploy (Railway/Render/VPS)
+- **Fase 8: Dashboard Streamlit** — Código listo, pendiente deploy en Community Cloud
+- Ideas pendientes: alertas de presupuesto, export

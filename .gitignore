@@ -4,3 +4,6 @@ node_modules/
 !.env.example
 .DS_Store
 *.log
+dashboard/.streamlit/secrets.toml
+dashboard/venv/
+__pycache__/
