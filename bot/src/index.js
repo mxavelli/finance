@@ -8,9 +8,11 @@ const {
   getGastosFijos, updateGastoFijoMonto, getLastTransactions, deleteTransaction,
   getIncomeStatus, registerIncome, getCurrentIncome, updateIncome, getFlowData,
   getCuotas, appendCuota, updateCuotaRegistradas, updateCuotaMonto,
+  getPresupuestos,
 } = require('./sheets');
 const { getCategories } = require('./categories');
 const { parseTransaction, formatAmount } = require('./parser');
+const { startScheduler } = require('./scheduler');
 
 const bot = new Bot(config.botToken);
 
@@ -31,6 +33,10 @@ const pendingFixedEdit = new Map(); // Edicion de monto de gasto fijo (userId �
 const pendingCuotaEdit = new Map(); // Ajuste de monto cuota post-confirmacion (userId → estado)
 let txCounter = 0;
 const TX_TTL = 10 * 60 * 1000; // 10 minutos
+
+// Alertas de presupuesto enviadas este mes (evita repetir).
+// Key: "categoria|tipo|moneda|month|year|threshold"
+const budgetAlertsSent = new Map();
 
 // Nombres de meses en español para parseo y display
 const MESES_NOMBRE = [
@@ -154,6 +160,59 @@ function parseMonth(arg) {
 // Formatea un monto para display (reutiliza logica del parser)
 function fmtMonto(monto, moneda) {
   return formatAmount(monto, moneda || 'ARS');
+}
+
+// Verifica si una transacción superó el 80% o 100% del presupuesto de su categoría.
+// Se ejecuta después de cada appendTransaction exitoso (fire and forget).
+async function checkBudgetAlert(userId, tx) {
+  try {
+    if (!tx.categoria || !tx.tipo || !tx.moneda) return;
+    const { month, year } = getNowBA();
+
+    const presupuestos = await getPresupuestos();
+    const key = `${tx.categoria}|${tx.tipo}|${tx.moneda}`;
+    const budget = presupuestos.get(key);
+    if (!budget || budget <= 0) return;
+
+    const transactions = await getMonthlyTransactions(month, year);
+    const totalGastado = transactions
+      .filter(t => t.categoria === tx.categoria && t.tipo === tx.tipo && t.moneda === tx.moneda)
+      .reduce((sum, t) => sum + t.monto, 0);
+
+    const porcentaje = (totalGastado / budget) * 100;
+
+    const thresholds = [
+      { pct: 100, emoji: '🔴', label: 'superó' },
+      { pct: 80, emoji: '🟡', label: 'llegó al' },
+    ];
+
+    for (const th of thresholds) {
+      if (porcentaje < th.pct) continue;
+
+      const alertKey = `${key}|${month}|${year}|${th.pct}`;
+      if (budgetAlertsSent.has(alertKey)) continue;
+      budgetAlertsSent.set(alertKey, Date.now());
+
+      const pctStr = Math.round(porcentaje);
+      const text =
+        `${th.emoji} *Alerta de presupuesto*\n\n` +
+        `Tu gasto en *${tx.categoria}* (${tx.tipo}) ${th.label} el ${pctStr}% del presupuesto.\n` +
+        `Gastado: ${fmtMonto(totalGastado, tx.moneda)} / ${fmtMonto(budget, tx.moneda)}`;
+
+      // Enviar a los usuarios relevantes
+      const tipoLower = (tx.tipo || '').toLowerCase();
+      const recipients = tipoLower.includes('moises') ? [config.moisesId]
+        : tipoLower.includes('oriana') ? [config.orianaId]
+        : [config.moisesId, config.orianaId];
+
+      for (const rid of recipients) {
+        await bot.api.sendMessage(rid, text, { parse_mode: 'Markdown' });
+      }
+      break; // Solo el umbral más alto alcanzado
+    }
+  } catch (error) {
+    console.error('Error chequeando presupuesto:', error.message);
+  }
 }
 
 // ============================================
@@ -942,6 +1001,7 @@ bot.callbackQuery(/^tx_ok:(\d+)$/, async (ctx) => {
 
   try {
     await appendTransaction(tx);
+    checkBudgetAlert(ctx.from.id, tx);
     await ctx.editMessageText(
       `✅ *Guardada*\n\n` +
       `📋 ${tx.descripcion}\n` +
@@ -975,6 +1035,7 @@ bot.callbackQuery(/^card_(\d+)_(\d+)$/, async (ctx) => {
 
   try {
     await appendTransaction(tx);
+    checkBudgetAlert(ctx.from.id, tx);
     await ctx.editMessageText(
       `✅ *Guardada*\n\n` +
       `📋 ${tx.descripcion}\n` +
@@ -1293,6 +1354,15 @@ bot.callbackQuery(/^fijos_ok:(\d+)$/, async (ctx) => {
         notas: `Cuota ${c.cuotaNumero}/${c.cuotasTotales}`,
       });
       await updateCuotaRegistradas(c.row, c.cuotaNumero);
+    }
+
+    // Budget alerts para cada categoría registrada
+    const categoriasRegistradas = new Set();
+    for (const g of aRegistrar) categoriasRegistradas.add(`${g.categoria}|${g.tipo}|${g.moneda}`);
+    for (const c of cuotasARegistrar) categoriasRegistradas.add(`${c.categoria}|${c.tipo}|${c.moneda}`);
+    for (const catKey of categoriasRegistradas) {
+      const [categoria, tipo, moneda] = catKey.split('|');
+      checkBudgetAlert(pending.userId, { categoria, tipo, moneda });
     }
 
     // Mensaje de confirmación
@@ -1691,8 +1761,21 @@ process.once('SIGTERM', () => bot.stop());
 bot.start({
   onStart: () => {
     console.log('Bot iniciado correctamente.');
-    // Verificar ingresos y gastos fijos despues de que el bot arranque
-    setTimeout(checkIncomeReminder, 3000);
-    setTimeout(checkFixedExpensesReminder, 5000);
+    // Iniciar scheduler: startup checks + cron jobs
+    startScheduler(bot, {
+      pendingFijos,
+      pendingFixedEdit,
+      getTxId: () => ++txCounter,
+      cleanMap,
+      filterGastosForUser,
+      filterCuotasForUser,
+      fmtMonto,
+      getNowBA,
+      getPendingCuotasForMonth,
+      MESES_CORTO,
+      checkIncomeReminder,
+      checkFixedExpensesReminder,
+      budgetAlertsSent,
+    });
   },
 });

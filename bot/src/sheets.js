@@ -694,6 +694,60 @@ async function getFlowData(month, year) {
   };
 }
 
+// Lee presupuestos mensuales por categoría de Presupuesto ARS (3 secciones) y USD (1 sección).
+// Retorna Map: key = "categoria|tipo|moneda" → presupuesto mensual.
+async function getPresupuestos() {
+  const [arsRes, usdRes] = await Promise.all([
+    sheets.spreadsheets.values.get({
+      spreadsheetId: config.sheetId,
+      range: 'Presupuesto ARS!A5:B45',
+      valueRenderOption: 'UNFORMATTED_VALUE',
+    }),
+    sheets.spreadsheets.values.get({
+      spreadsheetId: config.sheetId,
+      range: 'Presupuesto USD!A5:B15',
+      valueRenderOption: 'UNFORMATTED_VALUE',
+    }),
+  ]);
+
+  const presupuestos = new Map();
+  const arsRows = arsRes.data.values || [];
+  const usdRows = usdRes.data.values || [];
+
+  // ARS: indices 0-10 = Moises, 15-25 = Oriana, 30-40 = Compartido
+  // (indices 11-14 y 26-29 son TOTAL, blank, título, header → se filtran por valor)
+  const sections = [
+    { offset: 0, tipo: 'Individual Moises' },
+    { offset: 15, tipo: 'Individual Oriana' },
+    { offset: 30, tipo: 'Compartido' },
+  ];
+
+  for (const sec of sections) {
+    for (let i = 0; i < 11; i++) {
+      const row = arsRows[sec.offset + i];
+      if (!row || !row[0]) continue;
+      const categoria = String(row[0]).trim();
+      const presupuesto = typeof row[1] === 'number' ? row[1] : parseLocalNumber(row[1]);
+      if (presupuesto > 0) {
+        presupuestos.set(`${categoria}|${sec.tipo}|ARS`, presupuesto);
+      }
+    }
+  }
+
+  // USD: indices 0-10 = Moises
+  for (let i = 0; i < 11; i++) {
+    const row = usdRows[i];
+    if (!row || !row[0]) continue;
+    const categoria = String(row[0]).trim();
+    const presupuesto = typeof row[1] === 'number' ? row[1] : parseLocalNumber(row[1]);
+    if (presupuesto > 0) {
+      presupuestos.set(`${categoria}|Individual Moises|USD`, presupuesto);
+    }
+  }
+
+  return presupuestos;
+}
+
 // Setup unico: reescribe Dashboard desde "POR MÉTODO DE PAGO" con tarjetas individuales.
 // Ejecutar una sola vez con: node -e "require('./src/sheets').setupDashboardCards()"
 async function setupDashboardCards() {
@@ -1735,5 +1789,5 @@ module.exports = {
   getBalance, getMonthlyTransactions, getGastosFijos, updateGastoFijoMonto, getLastTransactions,
   deleteTransaction, getIncomeStatus, registerIncome, getCurrentIncome, updateIncome, getFlowData,
   setupCuotas, getCuotas, appendCuota, updateCuotaRegistradas, updateCuotaMonto,
-  extendSheetLimits, setupFormatos,
+  extendSheetLimits, setupFormatos, getPresupuestos,
 };

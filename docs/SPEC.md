@@ -12,7 +12,7 @@
 | 4. Integración Google Sheets API | ✅ Completa | Conexión bot ↔ Sheet |
 | 5. Flujo completo del bot | ✅ Completa | Consultas, borrado, ingresos automáticos |
 | 6. Dashboard y reportes | ✅ Completa | Fórmulas Dashboard, flujo financiero, resumen anual |
-| 7. Refinamiento | ⏳ En progreso | /tarjeta, /registrar_fijos, recordatorio gastos fijos |
+| 7. Refinamiento | ⏳ En progreso | /tarjeta, /registrar_fijos, recordatorio gastos fijos, auto-fijos, alertas presupuesto, resumen semanal |
 | 8. Dashboard Streamlit | ⏳ En progreso | Visualización de datos mobile-friendly |
 
 ---
@@ -95,6 +95,11 @@ El salario llega en USD a Deel y se distribuye en 3 bolsillos:
 | Deploy Bot | Railway con long polling, restart on failure, graceful shutdown (SIGTERM) | 2026-02-18 |
 | Parsing locale montos | `parseLocalNumber()` en sheets.js maneja formatos argentinos: "15.000" (punto=miles), "15.000,50", "$15.000". Usado en getGastosFijos() | 2026-02-18 |
 | Filtro por usuario robusto | `filterGastosForUser()` y `filterCuotasForUser()` usan comparación case-insensitive con `includes('moises')`/`includes('oriana')`. Items sin tipo o con tipo desconocido → visibles para ambos | 2026-02-18 |
+| Auto-fijos diario | Cron 9:00 AM BA: revisa gastos fijos + cuotas del día, manda preview con botones a cada usuario. Mismo mecanismo que /registrar\_fijos | 2026-02-19 |
+| Alertas de presupuesto | Al registrar cada gasto, chequea si supera 80% o 100% del presupuesto. Mensaje 🟡/🔴 al usuario. Deduplicado por mes/categoría/umbral | 2026-02-19 |
+| Resumen semanal | Cron lunes 9:00 AM BA: resumen compartido con totales, top categorías, balance, alertas presupuesto. Ambos usuarios reciben el mismo mensaje | 2026-02-19 |
+| Scheduler separado | `scheduler.js` encapsula todos los cron jobs. Recibe contexto compartido para evitar dependencias circulares con index.js | 2026-02-19 |
+| getPresupuestos() | Lee Presupuesto ARS (3 secciones) + USD (1 sección). Retorna Map con clave `"categoria\|tipo\|moneda"` → monto mensual | 2026-02-19 |
 
 ---
 
@@ -250,14 +255,15 @@ Contenido por función:
 
 ```
 bot/
-├── package.json          ← grammy, googleapis, dotenv
+├── package.json          ← grammy, googleapis, dotenv, node-cron
 ├── .env.example          ← Template de variables de entorno
 └── src/
-    ├── index.js          ← Entrada, auth middleware, parse + confirm flow
+    ├── index.js          ← Entrada, auth middleware, parse + confirm flow, alertas presupuesto
     ├── config.js         ← Env vars (incluye Telegram IDs)
     ├── sheets.js         ← Auth Service Account + cliente Google Sheets API v4
     ├── categories.js     ← Carga y cachea categorías desde el Sheet
-    └── parser.js         ← Parser de lenguaje natural (función pura)
+    ├── parser.js         ← Parser de lenguaje natural (función pura)
+    └── scheduler.js      ← Cron jobs: auto-fijos diario, resumen semanal, limpieza alertas
 ```
 
 ### Variables de entorno requeridas
@@ -343,6 +349,59 @@ Al iniciar el bot, si hay gastos fijos pendientes, envía lista personalizada a 
 - **Oriana** recibe: Individual Oriana + Compartidos pendientes
 
 Los compartidos aparecen en ambas listas. El primero que confirma los registra; al confirmar, el bot re-lee el Sheet para no duplicar los que el otro ya registró.
+
+### Auto-registro diario de gastos fijos (scheduler)
+
+Todos los días a las 9:00 AM Buenos Aires, el bot revisa si hay gastos fijos con día de vencimiento = hoy. Si los hay:
+
+1. Filtra gastos fijos pendientes (❌) cuyo día coincide con hoy
+2. Incluye cuotas pendientes del mes actual
+3. Cada usuario recibe su preview personalizado (Individual propio + Compartidos)
+4. Botones: [✅ Registrar todos] [✏️ Editar monto] [❌ Ahora no]
+5. Usa los mismos callbacks que `/registrar_fijos` — sin duplicar lógica
+
+### Alertas de presupuesto
+
+Se disparan al registrar cada gasto (no por cron). Después de guardar una transacción:
+
+1. Lee presupuestos con `getPresupuestos()` (Map: `"categoria|tipo|moneda"` → monto)
+2. Suma transacciones del mes para esa categoría+tipo+moneda
+3. Si supera 80% → alerta 🟡. Si supera 100% → alerta 🔴
+4. `budgetAlertsSent` Map evita alertas repetidas (key: `"cat|tipo|moneda|mes|año|umbral"`)
+5. Se limpia al inicio de cada mes (cron `0 0 1 * *`)
+
+Puntos de integración: después de `appendTransaction()` en tx normal, selección de tarjeta, y registro batch de gastos fijos.
+
+Destinatario según tipo de gasto:
+- Individual Moises → alerta a Moises
+- Individual Oriana → alerta a Oriana
+- Compartido → alerta a ambos
+
+### Resumen semanal
+
+Lunes 9:00 AM Buenos Aires. Mismo mensaje a ambos usuarios.
+
+Contenido:
+- Total semana (ARS + USD) y cantidad de transacciones
+- Top 5 categorías por monto
+- Desglose por tipo (Individual M / Individual O / Compartido)
+- Balance compartido del mes (acumulado)
+- Alertas de presupuesto: categorías en 🟡 (>80%) o 🔴 (>100%)
+
+Edge case: si estamos en los primeros 7 días del mes, también carga transacciones del mes anterior para cubrir la semana completa.
+
+### Scheduler (scheduler.js)
+
+```
+startScheduler(bot, ctx)
+├── setTimeout checkIncomeReminder (3s)
+├── setTimeout checkFixedExpensesReminder (5s)
+├── cron '0 9 * * *'   → checkDailyAutoFijos (diario)
+├── cron '0 9 * * 1'   → sendWeeklySummary (lunes)
+└── cron '0 0 1 * *'   → limpiar budgetAlertsSent (mensual)
+```
+
+Recibe un objeto `ctx` con referencias compartidas (Maps, funciones helper) para evitar dependencias circulares con index.js.
 
 ---
 
@@ -483,6 +542,6 @@ Streamlit Community Cloud:
 
 ## Próximos pasos al retomar
 
-- **Fase 7: Refinamiento** — En progreso. Ya implementados: `/tarjeta`, `/registrar_fijos`, recordatorio gastos fijos, tarjetas de crédito específicas, cuotas de tarjeta, rangos expandidos, parsing locale, filtros robustos
-- **Fase 8: Dashboard Streamlit** — Código listo, pendiente deploy en Community Cloud
-- Ideas pendientes: alertas de presupuesto, export
+- **Fase 7: Refinamiento** — En progreso. Ya implementados: `/tarjeta`, `/registrar_fijos`, recordatorio gastos fijos, tarjetas de crédito específicas, cuotas de tarjeta, rangos expandidos, parsing locale, filtros robustos, auto-fijos diario, alertas de presupuesto, resumen semanal
+- **Fase 8: Dashboard Streamlit** — Funcionando en Streamlit Community Cloud con viewer auth
+- Ideas pendientes: export, más ideas del usuario
