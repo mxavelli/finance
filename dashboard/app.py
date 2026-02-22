@@ -223,24 +223,27 @@ def render_resumen(mes, anio):
 
     # Filtrar según usuario seleccionado
     if usuario == 'Moises':
-        # Gastos: individuales Moises + su parte de compartidos
         total_ars = df_ars['monto_moises'].sum()
         total_usd = df_usd['monto'].sum()  # USD es solo Moises
         total_ingresos = ingreso_m_ars
         label_ingreso = 'Ingreso Moises'
         label_gasto = 'Gastado Moises'
+        # Sobrante: usar monto total porque el ingreso de Moises financia el hogar
+        gasto_sobrante = df_ars['monto'].sum()
     elif usuario == 'Oriana':
         total_ars = df_ars['monto_oriana'].sum()
         total_usd = 0
         total_ingresos = ingreso_o_ars
         label_ingreso = 'Ingreso Oriana'
         label_gasto = 'Gastado Oriana'
+        gasto_sobrante = total_ars
     else:
         total_ars = df_ars['monto'].sum()
         total_usd = df_usd['monto'].sum()
         total_ingresos = ingreso_m_ars + ingreso_o_ars
         label_ingreso = 'Ingresos ARS'
         label_gasto = 'Gastado ARS'
+        gasto_sobrante = total_ars
 
     # Restar inversiones (PPI) para que el sobrante refleje realidad
     total_inversiones = 0
@@ -251,7 +254,7 @@ def render_resumen(mes, anio):
         except Exception:
             pass
 
-    sobrante = total_ingresos - total_ars - total_inversiones
+    sobrante = total_ingresos - gasto_sobrante - total_inversiones
 
     # Sobrante — lo más importante arriba
     if total_ingresos > 0:
@@ -663,12 +666,16 @@ def render_flujo(mes, anio):
     if usuario == 'Moises':
         total_ingresos_ars = recibido_m
         total_gastos_ars = df[df['moneda'] == 'ARS'][col_monto].sum() if not df.empty else 0
+        # Sobrante: usar monto total porque el ingreso de Moises financia el hogar
+        gasto_sobrante = df[df['moneda'] == 'ARS']['monto'].sum() if not df.empty else 0
     elif usuario == 'Oriana':
         total_ingresos_ars = ingreso_o
         total_gastos_ars = df[df['moneda'] == 'ARS'][col_monto].sum() if not df.empty else 0
+        gasto_sobrante = total_gastos_ars
     else:
         total_ingresos_ars = recibido_m + ingreso_o
         total_gastos_ars = df[df['moneda'] == 'ARS']['monto'].sum() if not df.empty else 0
+        gasto_sobrante = total_gastos_ars
 
     # Restar inversiones (PPI) del sobrante
     total_inversiones = 0
@@ -679,7 +686,7 @@ def render_flujo(mes, anio):
         except Exception:
             pass
 
-    sobrante_ars = total_ingresos_ars - total_gastos_ars - total_inversiones
+    sobrante_ars = total_ingresos_ars - gasto_sobrante - total_inversiones
     total_gastos_usd = df[df['moneda'] == 'USD']['monto'].sum() if not df.empty else 0
 
     # Sección ARS
