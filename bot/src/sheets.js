@@ -77,7 +77,7 @@ async function setupPhase4() {
   const txId = sheetMap['Transacciones'];
   const gfId = sheetMap['Gastos Fijos'];
   const catId = sheetMap['Categorías'];
-  const MAX_TX = 200;
+  const MAX_TX = 5000;
 
   const metodosPago = ['Deel Card', 'Banco', 'Efectivo', 'Deel USD', ...config.todasLasTarjetas];
   const validationValues = metodosPago.map(v => ({ userEnteredValue: v }));
@@ -1578,7 +1578,7 @@ async function setupCuotas() {
 // Ejecutar con: node -e "require('./src/sheets').extendSheetLimits()"
 async function extendSheetLimits() {
   const spreadsheetId = config.sheetId;
-  const MAX_TX = 200;
+  const MAX_TX = 5000;
   const MAX_ROW = 100; // filas de datos (2 a 101)
 
   function loc(f) {
@@ -1712,7 +1712,7 @@ async function extendSheetLimits() {
 // Ejecutar con: node -e "require('./src/sheets').setupFormatos()"
 async function setupFormatos() {
   const spreadsheetId = config.sheetId;
-  const MAX_TX = 200;
+  const MAX_TX = 5000;
 
   const meta = await sheets.spreadsheets.get({ spreadsheetId });
   const sheetMap = {};
@@ -1876,7 +1876,7 @@ async function setupSaldado() {
   const spreadsheetId = config.sheetId;
   function loc(f) { return f.replace(/,/g, ';'); }
 
-  const MAX = 200;
+  const MAX = 5000;
   const data = [];
 
   // Header "Saldado" en Transacciones Q1

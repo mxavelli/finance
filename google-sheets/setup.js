@@ -21,7 +21,7 @@
 // ==========================================
 
 const AÑO_INICIAL = 2026;
-const MAX_TX = 200;
+const MAX_TX = 5000;
 
 const CATEGORIAS = [
   ['Alimentación', 'super,supermercado,mercado,comida,cena,almuerzo,desayuno,delivery,restaurante,café,bar,pedidosya,rappi'],
