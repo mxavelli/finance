@@ -762,10 +762,10 @@ async function setupDashboardCards() {
 
   const mf = 'Transacciones!M:M,$B$4,Transacciones!N:N,$B$5';
 
-  // 1. Limpiar todo desde fila 19 hacia abajo (metodos + balance + flujo + resumen anual)
+  // 1. Limpiar todo desde fila 19 hacia abajo (metodos + balance + flujo + ahorro + resumen anual)
   await sheets.spreadsheets.values.clear({
     spreadsheetId,
-    range: 'Dashboard!A19:F65',
+    range: 'Dashboard!A19:H75',
   });
 
   const data = [];
@@ -802,57 +802,74 @@ async function setupDashboardCards() {
     ],
   });
 
-  // === FLUJO DEL MES (rows 33-46) ===
+  // === FLUJO DEL MES (rows 33-47) ===
+  const ahorroMf = `Transacciones!D:D,"Ahorro / Inversión"`;
   data.push({
-    range: 'Dashboard!A33:B46',
+    range: 'Dashboard!A33:B47',
     values: [
       ['', ''],                                                                                                 // 33: separador
       ['FLUJO DEL MES', ''],                                                                                    // 34: header
       ['Ingresó Moises (ARS)', loc(`=IFERROR(INDEX(Ingresos!F:F,$B$4+2),0)`)],                                  // 35
       ['Ingresó Oriana (ARS)', loc(`=IFERROR(INDEX(Ingresos!F:F,$B$4+18),0)`)],                                 // 36
       ['Total Ingresado ARS', loc('=B35+B36')],                                                                 // 37
-      ['Gastado ARS', loc(`=SUMIFS(Transacciones!E:E,Transacciones!F:F,"ARS",${mf})`)],                          // 38
-      ['— Tarjetas', loc('=B24')],                                                                              // 39: referencia al total tarjetas
-      ['Sobrante ARS', loc('=B37-B38')],                                                                        // 40
-      ['', ''],                                                                                                 // 41
-      ['Salario Total USD', loc(`=IFERROR(INDEX(Ingresos!B:B,$B$4+2),0)+IFERROR(INDEX(Ingresos!B:B,$B$4+18),0)`)], // 42
-      ['Transferido a ARS', loc(`=IFERROR(INDEX(Ingresos!D:D,$B$4+2),0)+IFERROR(INDEX(Ingresos!D:D,$B$4+18),0)`)], // 43
-      ['Gastado USD', loc(`=SUMIFS(Transacciones!E:E,Transacciones!F:F,"USD",${mf})`)],                          // 44
-      ['Queda en Deel USD', loc(`=IFERROR(INDEX(Ingresos!C:C,$B$4+2),0)+IFERROR(INDEX(Ingresos!C:C,$B$4+18),0)`)], // 45
-      ['', ''],                                                                                                 // 46
+      ['Gastos Fijos estimados', loc(`=SUMIFS('Gastos Fijos'!C:C,'Gastos Fijos'!D:D,"ARS",'Gastos Fijos'!I:I,"Mensual")`)], // 38
+      ['Gastado ARS', loc(`=SUMIFS(Transacciones!E:E,Transacciones!F:F,"ARS",${mf})`)],                          // 39
+      ['— Tarjetas', loc('=B24')],                                                                              // 40: referencia al total tarjetas
+      ['Sobrante ARS', loc('=B37-B39')],                                                                        // 41
+      ['', ''],                                                                                                 // 42
+      ['Salario Total USD', loc(`=IFERROR(INDEX(Ingresos!B:B,$B$4+2),0)+IFERROR(INDEX(Ingresos!B:B,$B$4+18),0)`)], // 43
+      ['Transferido a ARS', loc(`=IFERROR(INDEX(Ingresos!D:D,$B$4+2),0)+IFERROR(INDEX(Ingresos!D:D,$B$4+18),0)`)], // 44
+      ['Gastado USD', loc(`=SUMIFS(Transacciones!E:E,Transacciones!F:F,"USD",${mf})`)],                          // 45
+      ['Queda en Deel USD', loc(`=IFERROR(INDEX(Ingresos!C:C,$B$4+2),0)+IFERROR(INDEX(Ingresos!C:C,$B$4+18),0)`)], // 46
+      ['', ''],                                                                                                 // 47
     ],
   });
 
-  // === RESUMEN ANUAL (rows 48-63) ===
+  // === AHORRO (rows 48-53) ===
   data.push({
-    range: 'Dashboard!A48:F50',
+    range: 'Dashboard!A48:B53',
     values: [
-      ['', '', '', '', '', ''],
-      ['RESUMEN ANUAL', '', '', '', '', ''],
-      ['Mes', 'Ingresado ARS', 'Gastado ARS', 'Sobrante ARS', 'Gastado USD', 'Ahorro USD'],
+      ['AHORRO', ''],                                                                                           // 48: header
+      ['Ahorro ARS (mes)', loc(`=SUMIFS(Transacciones!E:E,${ahorroMf},Transacciones!F:F,"ARS",${mf})`)],        // 49
+      ['Ahorro USD (mes)', loc(`=SUMIFS(Transacciones!E:E,${ahorroMf},Transacciones!F:F,"USD",${mf})`)],        // 50
+      ['Ahorro ARS (acumulado)', loc(`=SUMIFS(Transacciones!E:E,${ahorroMf},Transacciones!F:F,"ARS",Transacciones!N:N,$B$5)`)], // 51
+      ['Ahorro USD (acumulado)', loc(`=SUMIFS(Transacciones!E:E,${ahorroMf},Transacciones!F:F,"USD",Transacciones!N:N,$B$5)`)], // 52
+      ['', ''],                                                                                                 // 53
     ],
   });
 
-  // 12 meses (rows 51-62)
+  // === RESUMEN ANUAL (rows 54-69) ===
+  data.push({
+    range: 'Dashboard!A54:H56',
+    values: [
+      ['', '', '', '', '', '', '', ''],
+      ['RESUMEN ANUAL', '', '', '', '', '', '', ''],
+      ['Mes', 'Ingresado ARS', 'Gastado ARS', 'Ahorro ARS', 'Sobrante ARS', 'Gastado USD', 'Ahorro USD', 'Queda Deel USD'],
+    ],
+  });
+
+  // 12 meses (rows 57-68)
   const anualRows = [];
   for (let m = 1; m <= 12; m++) {
     const mfFijo = `Transacciones!M:M,${m},Transacciones!N:N,$B$5`;
-    const row = 50 + m;
+    const row = 56 + m;
     anualRows.push([
       MESES[m - 1],
       loc(`=IFERROR(INDEX(Ingresos!F:F,${m + 2}),0)+IFERROR(INDEX(Ingresos!F:F,${m + 18}),0)`),
       loc(`=SUMIFS(Transacciones!E:E,Transacciones!F:F,"ARS",${mfFijo})`),
+      loc(`=SUMIFS(Transacciones!E:E,${ahorroMf},Transacciones!F:F,"ARS",${mfFijo})`),
       loc(`=B${row}-C${row}`),
       loc(`=SUMIFS(Transacciones!E:E,Transacciones!F:F,"USD",${mfFijo})`),
+      loc(`=SUMIFS(Transacciones!E:E,${ahorroMf},Transacciones!F:F,"USD",${mfFijo})`),
       loc(`=IFERROR(INDEX(Ingresos!C:C,${m + 2}),0)+IFERROR(INDEX(Ingresos!C:C,${m + 18}),0)`),
     ]);
   }
-  data.push({ range: 'Dashboard!A51:F62', values: anualRows });
+  data.push({ range: 'Dashboard!A57:H68', values: anualRows });
 
-  // Total anual (row 63)
+  // Total anual (row 69)
   data.push({
-    range: 'Dashboard!A63:F63',
-    values: [['TOTAL', loc('=SUM(B51:B62)'), loc('=SUM(C51:C62)'), loc('=SUM(D51:D62)'), loc('=SUM(E51:E62)'), loc('=SUM(F51:F62)')]],
+    range: 'Dashboard!A69:H69',
+    values: [['TOTAL', loc('=SUM(B57:B68)'), loc('=SUM(C57:C68)'), loc('=SUM(D57:D68)'), loc('=SUM(E57:E68)'), loc('=SUM(F57:F68)'), loc('=SUM(G57:G68)'), loc('=SUM(H57:H68)')]],
   });
 
   // Escribir todo en un batch
@@ -871,8 +888,9 @@ async function setupDashboardCards() {
   const arsRanges = [
     [19, 28, 1, 2],   // B20:B28 (metodos de pago)
     [30, 31, 1, 2],   // B31 (balance)
-    [34, 46, 1, 2],   // B35:B45 (flujo)
-    [50, 63, 1, 6],   // B51:F63 (resumen anual)
+    [34, 47, 1, 2],   // B35:B47 (flujo)
+    [48, 53, 1, 2],   // B49:B52 (ahorro)
+    [56, 69, 1, 8],   // B57:H69 (resumen anual)
   ];
   for (const [startRow, endRow, startCol, endCol] of arsRanges) {
     formatRequests.push({
@@ -884,11 +902,11 @@ async function setupDashboardCards() {
     });
   }
 
-  // Bold para headers: POR MÉTODO DE PAGO (row 19), BALANCE (row 30), FLUJO (row 34), RESUMEN ANUAL (row 49), TOTAL (row 63), Tarjetas total (row 24)
-  for (const row of [18, 29, 33, 48, 62]) {
+  // Bold para headers: POR MÉTODO DE PAGO (row 19), BALANCE (row 30), FLUJO (row 34), AHORRO (row 48), RESUMEN ANUAL (row 55), TOTAL (row 69)
+  for (const row of [18, 29, 33, 47, 54, 68]) {
     formatRequests.push({
       repeatCell: {
-        range: { sheetId: dashId, startRowIndex: row, endRowIndex: row + 1, startColumnIndex: 0, endColumnIndex: 6 },
+        range: { sheetId: dashId, startRowIndex: row, endRowIndex: row + 1, startColumnIndex: 0, endColumnIndex: 8 },
         cell: { userEnteredFormat: { textFormat: { bold: true } } },
         fields: 'userEnteredFormat.textFormat.bold',
       },
@@ -904,10 +922,10 @@ async function setupDashboardCards() {
     },
   });
 
-  // Bold para headers resumen anual (row 50)
+  // Bold para headers resumen anual (row 56)
   formatRequests.push({
     repeatCell: {
-      range: { sheetId: dashId, startRowIndex: 49, endRowIndex: 50, startColumnIndex: 0, endColumnIndex: 6 },
+      range: { sheetId: dashId, startRowIndex: 55, endRowIndex: 56, startColumnIndex: 0, endColumnIndex: 8 },
       cell: { userEnteredFormat: { textFormat: { bold: true } } },
       fields: 'userEnteredFormat.textFormat.bold',
     },
@@ -1100,10 +1118,11 @@ async function setupEstilos() {
     const sectionRows = [
       { row: 6, label: 'RESUMEN DEL MES', bg: C.headerDark, text: C.white },      // row 7
       { row: 11, label: 'GASTO POR PERSONA', bg: C.headerMed, text: C.white },     // row 12
-      { row: 17, label: 'POR MÉTODO DE PAGO', bg: C.headerMed, text: C.white },    // row 18 (setupDashboardCards wrote row 19 header)
+      { row: 17, label: 'POR MÉTODO DE PAGO', bg: C.headerMed, text: C.white },    // row 18
       { row: 29, label: 'BALANCE COMPARTIDO', bg: C.headerMed, text: C.white },     // row 30
       { row: 33, label: 'FLUJO DEL MES', bg: C.headerDark, text: C.white },         // row 34
-      { row: 48, label: 'RESUMEN ANUAL', bg: C.headerDark, text: C.white },         // row 49
+      { row: 47, label: 'AHORRO', bg: C.headerMed, text: C.white },                 // row 48
+      { row: 54, label: 'RESUMEN ANUAL', bg: C.headerDark, text: C.white },         // row 55
     ];
 
     for (const sec of sectionRows) {
@@ -1117,7 +1136,8 @@ async function setupEstilos() {
       [12, 16],  // gasto por persona
       [19, 28],  // metodos de pago
       [30, 31],  // balance
-      [34, 45],  // flujo
+      [34, 47],  // flujo
+      [48, 53],  // ahorro
     ];
     for (const [r1, r2] of labelRanges) {
       requests.push(textFmt(dash, r1, r2, 0, 1, { color: C.darkText }));
@@ -1133,18 +1153,24 @@ async function setupEstilos() {
 
     // Flujo: ingresos en verde, gastos en rojo, sobrante en azul
     requests.push(textFmt(dash, 34, 37, 1, 2, { color: C.green }));  // ingresos
-    requests.push(textFmt(dash, 37, 39, 1, 2, { color: C.red }));    // gastos
-    requests.push(bgColor(dash, 39, 40, 0, 2, C.greenLight));        // sobrante
-    requests.push(textFmt(dash, 39, 40, 0, 2, { bold: true, color: C.green }));
+    requests.push(textFmt(dash, 37, 38, 1, 2, { color: C.gold }));   // gastos fijos estimados
+    requests.push(textFmt(dash, 38, 40, 1, 2, { color: C.red }));    // gastos reales
+    requests.push(bgColor(dash, 40, 41, 0, 2, C.greenLight));        // sobrante
+    requests.push(textFmt(dash, 40, 41, 0, 2, { bold: true, color: C.green }));
+
+    // Ahorro: valores en verde
+    requests.push(textFmt(dash, 48, 53, 1, 2, { color: C.green }));
+    // Acumulados en bold
+    requests.push(textFmt(dash, 50, 52, 0, 2, { bold: true }));
 
     // Resumen anual - headers fila
-    requests.push(bgColor(dash, 49, 50, 0, 6, C.headerLight));
-    requests.push(textFmt(dash, 49, 50, 0, 6, { bold: true, color: C.headerDark, hAlign: 'CENTER' }));
+    requests.push(bgColor(dash, 55, 56, 0, 8, C.headerLight));
+    requests.push(textFmt(dash, 55, 56, 0, 8, { bold: true, color: C.headerDark, hAlign: 'CENTER' }));
     // Alternating rows
-    requests.push(...altRows(dash, 50, 62, 6));
+    requests.push(...altRows(dash, 56, 68, 8));
     // Total anual
-    requests.push(bgColor(dash, 62, 63, 0, 6, C.totalBg));
-    requests.push(textFmt(dash, 62, 63, 0, 6, { bold: true, color: C.headerDark }));
+    requests.push(bgColor(dash, 68, 69, 0, 8, C.totalBg));
+    requests.push(textFmt(dash, 68, 69, 0, 8, { bold: true, color: C.headerDark }));
     // Border bajo headers
     requests.push(border(dash, 6, 7, 0, 6, 'bottom'));
 
@@ -1323,6 +1349,278 @@ async function setupEstilos() {
   });
 
   console.log('Estilos profesionales aplicados a todas las hojas.');
+}
+
+// Setup: aplica tema oscuro a todas las hojas del Sheet.
+// Ejecutar con: node -e "require('./src/sheets').setupEstilosDark()"
+async function setupEstilosDark() {
+  const spreadsheetId = config.sheetId;
+
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const sheetMap = {};
+  for (const s of meta.data.sheets) {
+    sheetMap[s.properties.title] = s.properties.sheetId;
+  }
+
+  // === PALETA DARK ===
+  const D = {
+    bg:          { red: 0.11, green: 0.11, blue: 0.14 },   // #1C1C24 fondo principal
+    bgAlt:       { red: 0.15, green: 0.15, blue: 0.19 },   // #262630 fila alternada
+    surface:     { red: 0.18, green: 0.18, blue: 0.22 },   // #2E2E38 superficie elevada
+    headerDark:  { red: 0.08, green: 0.14, blue: 0.25 },   // #142440 header oscuro
+    headerMed:   { red: 0.12, green: 0.22, blue: 0.40 },   // #1F3866 header medio
+    headerLight: { red: 0.15, green: 0.25, blue: 0.42 },   // #26406B header claro
+    text:        { red: 0.88, green: 0.89, blue: 0.92 },   // #E0E3EB texto principal
+    textMuted:   { red: 0.55, green: 0.57, blue: 0.63 },   // #8C92A0 texto secundario
+    white:       { red: 1, green: 1, blue: 1 },
+    green:       { red: 0.30, green: 0.78, blue: 0.48 },   // #4DC77A verde brillante
+    greenDark:   { red: 0.10, green: 0.22, blue: 0.14 },   // #1A3824 fondo verde
+    red:         { red: 0.90, green: 0.35, blue: 0.35 },   // #E65959 rojo brillante
+    redDark:     { red: 0.25, green: 0.10, blue: 0.10 },   // #401A1A fondo rojo
+    gold:        { red: 0.95, green: 0.78, blue: 0.30 },   // #F2C74D dorado brillante
+    goldDark:    { red: 0.22, green: 0.18, blue: 0.08 },   // #382E14 fondo dorado
+    purple:      { red: 0.60, green: 0.40, blue: 0.85 },   // #9966D9 morado brillante
+    totalBg:     { red: 0.13, green: 0.13, blue: 0.17 },   // #21212B fondo total
+  };
+
+  // Helpers (mismos que setupEstilos pero con paleta dark)
+  function bgColor(sheetId, r1, r2, c1, c2, color) {
+    return { repeatCell: { range: { sheetId, startRowIndex: r1, endRowIndex: r2, startColumnIndex: c1, endColumnIndex: c2 }, cell: { userEnteredFormat: { backgroundColor: color } }, fields: 'userEnteredFormat.backgroundColor' } };
+  }
+  function textFmt(sheetId, r1, r2, c1, c2, opts) {
+    const cell = { userEnteredFormat: {} };
+    const fields = [];
+    if (opts.bold !== undefined) { cell.userEnteredFormat.textFormat = { ...(cell.userEnteredFormat.textFormat || {}), bold: opts.bold }; fields.push('userEnteredFormat.textFormat.bold'); }
+    if (opts.color) { cell.userEnteredFormat.textFormat = { ...(cell.userEnteredFormat.textFormat || {}), foregroundColorStyle: { rgbColor: opts.color } }; fields.push('userEnteredFormat.textFormat.foregroundColorStyle'); }
+    if (opts.fontSize) { cell.userEnteredFormat.textFormat = { ...(cell.userEnteredFormat.textFormat || {}), fontSize: opts.fontSize }; fields.push('userEnteredFormat.textFormat.fontSize'); }
+    if (opts.hAlign) { cell.userEnteredFormat.horizontalAlignment = opts.hAlign; fields.push('userEnteredFormat.horizontalAlignment'); }
+    if (opts.bg) { cell.userEnteredFormat.backgroundColor = opts.bg; fields.push('userEnteredFormat.backgroundColor'); }
+    return { repeatCell: { range: { sheetId, startRowIndex: r1, endRowIndex: r2, startColumnIndex: c1, endColumnIndex: c2 }, cell, fields: fields.join(',') } };
+  }
+  function headerRow(sheetId, row, cols, bg) {
+    return [bgColor(sheetId, row, row + 1, 0, cols, bg || D.headerDark), textFmt(sheetId, row, row + 1, 0, cols, { bold: true, color: D.white })];
+  }
+  function altRowsDark(sheetId, startRow, endRow, cols) {
+    const reqs = [];
+    for (let r = startRow; r < endRow; r++) {
+      reqs.push(bgColor(sheetId, r, r + 1, 0, cols, (r - startRow) % 2 === 0 ? D.bg : D.bgAlt));
+      reqs.push(textFmt(sheetId, r, r + 1, 0, cols, { color: D.text }));
+    }
+    return reqs;
+  }
+
+  const requests = [];
+
+  // ============================================================
+  // 1. DASHBOARD
+  // ============================================================
+  const dash = sheetMap['Dashboard'];
+  if (dash !== undefined) {
+    // Fondo oscuro completo
+    requests.push(bgColor(dash, 0, 75, 0, 8, D.bg));
+    requests.push(textFmt(dash, 0, 75, 0, 8, { color: D.text }));
+
+    // Titulo
+    requests.push(textFmt(dash, 0, 1, 0, 4, { bold: true, fontSize: 16, color: D.white }));
+    requests.push(textFmt(dash, 1, 2, 0, 4, { color: D.textMuted, fontSize: 10 }));
+
+    // Selectores mes/año
+    requests.push(textFmt(dash, 3, 5, 0, 1, { bold: true, color: D.gold }));
+    requests.push(bgColor(dash, 3, 5, 1, 2, D.goldDark));
+    requests.push(textFmt(dash, 3, 5, 1, 2, { bold: true, color: D.gold, hAlign: 'CENTER' }));
+
+    // Secciones headers
+    const sectionRows = [
+      { row: 6, bg: D.headerDark },   // RESUMEN DEL MES
+      { row: 11, bg: D.headerMed },    // GASTO POR PERSONA
+      { row: 17, bg: D.headerMed },    // POR MÉTODO DE PAGO
+      { row: 29, bg: D.headerMed },    // BALANCE COMPARTIDO
+      { row: 33, bg: D.headerDark },   // FLUJO DEL MES
+      { row: 47, bg: D.headerMed },    // AHORRO
+      { row: 54, bg: D.headerDark },   // RESUMEN ANUAL
+    ];
+    for (const sec of sectionRows) {
+      requests.push(bgColor(dash, sec.row, sec.row + 1, 0, 8, sec.bg));
+      requests.push(textFmt(dash, sec.row, sec.row + 1, 0, 8, { bold: true, color: D.white }));
+    }
+
+    // Valores resumen
+    requests.push(textFmt(dash, 7, 10, 1, 2, { bold: true, color: D.white }));
+    // Por persona
+    requests.push(textFmt(dash, 12, 16, 1, 2, { color: D.text }));
+    // Tarjetas total
+    requests.push(bgColor(dash, 23, 24, 0, 2, D.surface));
+    requests.push(textFmt(dash, 23, 24, 0, 2, { bold: true, color: D.white }));
+
+    // Flujo: ingresos verde, estimados dorado, gastos rojo, sobrante verde
+    requests.push(textFmt(dash, 34, 37, 1, 2, { color: D.green }));
+    requests.push(textFmt(dash, 37, 38, 1, 2, { color: D.gold }));
+    requests.push(textFmt(dash, 38, 40, 1, 2, { color: D.red }));
+    requests.push(bgColor(dash, 40, 41, 0, 2, D.greenDark));
+    requests.push(textFmt(dash, 40, 41, 0, 2, { bold: true, color: D.green }));
+
+    // Ahorro: verde brillante
+    requests.push(textFmt(dash, 48, 53, 1, 2, { color: D.green }));
+    requests.push(textFmt(dash, 50, 52, 0, 2, { bold: true, color: D.green }));
+
+    // Resumen anual
+    requests.push(bgColor(dash, 55, 56, 0, 8, D.headerLight));
+    requests.push(textFmt(dash, 55, 56, 0, 8, { bold: true, color: D.white, hAlign: 'CENTER' }));
+    requests.push(...altRowsDark(dash, 56, 68, 8));
+    requests.push(bgColor(dash, 68, 69, 0, 8, D.totalBg));
+    requests.push(textFmt(dash, 68, 69, 0, 8, { bold: true, color: D.white }));
+  }
+
+  // ============================================================
+  // 2. TRANSACCIONES
+  // ============================================================
+  const tx = sheetMap['Transacciones'];
+  if (tx !== undefined) {
+    requests.push(bgColor(tx, 0, 200, 0, 17, D.bg));
+    requests.push(textFmt(tx, 0, 200, 0, 17, { color: D.text }));
+    requests.push(...headerRow(tx, 0, 17));
+    requests.push(...altRowsDark(tx, 1, 100, 12));
+  }
+
+  // ============================================================
+  // 3. PRESUPUESTO ARS
+  // ============================================================
+  const pArs = sheetMap['Presupuesto ARS'];
+  if (pArs !== undefined) {
+    requests.push(bgColor(pArs, 0, 50, 0, 16, D.bg));
+    requests.push(textFmt(pArs, 0, 50, 0, 16, { color: D.text }));
+    requests.push(textFmt(pArs, 0, 1, 0, 2, { bold: true, color: D.white, fontSize: 12 }));
+    const secStarts = [2, 17, 32];
+    const secColors = [D.headerDark, D.headerMed, { red: 0.30, green: 0.15, blue: 0.50 }];
+    for (let s = 0; s < 3; s++) {
+      const start = secStarts[s];
+      requests.push(bgColor(pArs, start, start + 1, 0, 16, D.surface));
+      requests.push(textFmt(pArs, start, start + 1, 0, 16, { bold: true, color: secColors[s] === D.headerDark ? D.white : D.purple, hAlign: 'CENTER' }));
+      requests.push(bgColor(pArs, start + 1, start + 2, 0, 16, secColors[s]));
+      requests.push(textFmt(pArs, start + 1, start + 2, 0, 16, { bold: true, color: D.white, hAlign: 'CENTER' }));
+      requests.push(...altRowsDark(pArs, start + 2, start + 13, 16));
+      requests.push(bgColor(pArs, start + 13, start + 14, 0, 16, D.totalBg));
+      requests.push(textFmt(pArs, start + 13, start + 14, 0, 16, { bold: true, color: D.white }));
+    }
+  }
+
+  // ============================================================
+  // 4. PRESUPUESTO USD
+  // ============================================================
+  const pUsd = sheetMap['Presupuesto USD'];
+  if (pUsd !== undefined) {
+    requests.push(bgColor(pUsd, 0, 20, 0, 16, D.bg));
+    requests.push(textFmt(pUsd, 0, 20, 0, 16, { color: D.text }));
+    requests.push(textFmt(pUsd, 0, 1, 0, 2, { bold: true, color: D.white, fontSize: 12 }));
+    requests.push(bgColor(pUsd, 2, 3, 0, 16, D.surface));
+    requests.push(textFmt(pUsd, 2, 3, 0, 16, { bold: true, color: D.white, hAlign: 'CENTER' }));
+    requests.push(bgColor(pUsd, 3, 4, 0, 16, D.headerDark));
+    requests.push(textFmt(pUsd, 3, 4, 0, 16, { bold: true, color: D.white, hAlign: 'CENTER' }));
+    requests.push(...altRowsDark(pUsd, 4, 15, 16));
+    requests.push(bgColor(pUsd, 15, 16, 0, 16, D.totalBg));
+    requests.push(textFmt(pUsd, 15, 16, 0, 16, { bold: true, color: D.white }));
+  }
+
+  // ============================================================
+  // 5. BALANCE COMPARTIDO
+  // ============================================================
+  const bal = sheetMap['Balance Compartido'];
+  if (bal !== undefined) {
+    requests.push(bgColor(bal, 0, 25, 0, 8, D.bg));
+    requests.push(textFmt(bal, 0, 25, 0, 8, { color: D.text }));
+    requests.push(textFmt(bal, 0, 1, 0, 2, { bold: true, color: D.white, fontSize: 12 }));
+    requests.push(bgColor(bal, 2, 3, 0, 8, D.surface));
+    requests.push(textFmt(bal, 2, 3, 0, 8, { bold: true, color: D.purple, hAlign: 'CENTER' }));
+    requests.push(bgColor(bal, 3, 4, 0, 8, { red: 0.30, green: 0.15, blue: 0.50 }));
+    requests.push(textFmt(bal, 3, 4, 0, 8, { bold: true, color: D.white, hAlign: 'CENTER' }));
+    requests.push(...altRowsDark(bal, 4, 16, 8));
+    requests.push(bgColor(bal, 16, 17, 0, 8, D.totalBg));
+    requests.push(textFmt(bal, 16, 17, 0, 8, { bold: true, color: D.white }));
+    requests.push(bgColor(bal, 18, 19, 0, 2, D.goldDark));
+    requests.push(textFmt(bal, 18, 19, 0, 2, { bold: true, fontSize: 13, color: D.gold }));
+  }
+
+  // ============================================================
+  // 6. GASTOS FIJOS
+  // ============================================================
+  const gf = sheetMap['Gastos Fijos'];
+  if (gf !== undefined) {
+    requests.push(bgColor(gf, 0, 102, 0, 10, D.bg));
+    requests.push(textFmt(gf, 0, 102, 0, 10, { color: D.text }));
+    requests.push(...headerRow(gf, 0, 10, D.red));
+    requests.push(bgColor(gf, 0, 1, 0, 10, { red: 0.35, green: 0.10, blue: 0.10 }));
+    requests.push(...altRowsDark(gf, 1, 51, 10));
+  }
+
+  // ============================================================
+  // 7. INGRESOS
+  // ============================================================
+  const ing = sheetMap['Ingresos'];
+  if (ing !== undefined) {
+    requests.push(bgColor(ing, 0, 35, 0, 6, D.bg));
+    requests.push(textFmt(ing, 0, 35, 0, 6, { color: D.text }));
+    // Moises
+    requests.push(bgColor(ing, 0, 1, 0, 6, D.surface));
+    requests.push(textFmt(ing, 0, 1, 0, 6, { bold: true, color: D.green, hAlign: 'CENTER' }));
+    requests.push(bgColor(ing, 1, 2, 0, 6, { red: 0.08, green: 0.28, blue: 0.15 }));
+    requests.push(textFmt(ing, 1, 2, 0, 6, { bold: true, color: D.white, hAlign: 'CENTER' }));
+    requests.push(...altRowsDark(ing, 2, 14, 6));
+    requests.push(bgColor(ing, 14, 15, 0, 6, D.totalBg));
+    requests.push(textFmt(ing, 14, 15, 0, 6, { bold: true, color: D.white }));
+    // Oriana
+    requests.push(bgColor(ing, 16, 17, 0, 6, D.surface));
+    requests.push(textFmt(ing, 16, 17, 0, 6, { bold: true, color: D.purple, hAlign: 'CENTER' }));
+    requests.push(bgColor(ing, 17, 18, 0, 6, { red: 0.30, green: 0.15, blue: 0.50 }));
+    requests.push(textFmt(ing, 17, 18, 0, 6, { bold: true, color: D.white, hAlign: 'CENTER' }));
+    requests.push(...altRowsDark(ing, 18, 30, 6));
+    requests.push(bgColor(ing, 30, 31, 0, 6, D.totalBg));
+    requests.push(textFmt(ing, 30, 31, 0, 6, { bold: true, color: D.white }));
+  }
+
+  // ============================================================
+  // 8. CATEGORÍAS
+  // ============================================================
+  const cat = sheetMap['Categorías'];
+  if (cat !== undefined) {
+    requests.push(bgColor(cat, 0, 20, 0, 2, D.bg));
+    requests.push(textFmt(cat, 0, 20, 0, 2, { color: D.text }));
+    requests.push(...headerRow(cat, 0, 2, { red: 0.25, green: 0.25, blue: 0.30 }));
+    requests.push(...altRowsDark(cat, 1, 15, 2));
+  }
+
+  // ============================================================
+  // 9. CUOTAS
+  // ============================================================
+  const cuotas = sheetMap['Cuotas'];
+  if (cuotas !== undefined) {
+    requests.push(bgColor(cuotas, 0, 52, 0, 13, D.bg));
+    requests.push(textFmt(cuotas, 0, 52, 0, 13, { color: D.text }));
+    requests.push(...headerRow(cuotas, 0, 13, D.headerDark));
+    requests.push(...altRowsDark(cuotas, 1, 51, 13));
+  }
+
+  // ============================================================
+  // TAB COLORS (dark versions)
+  // ============================================================
+  const tabColors = {
+    'Dashboard':          { red: 0.10, green: 0.20, blue: 0.50 },
+    'Transacciones':      { red: 0.10, green: 0.35, blue: 0.20 },
+    'Presupuesto ARS':    { red: 0.55, green: 0.35, blue: 0.05 },
+    'Presupuesto USD':    { red: 0.45, green: 0.28, blue: 0.05 },
+    'Balance Compartido': { red: 0.35, green: 0.15, blue: 0.45 },
+    'Gastos Fijos':       { red: 0.50, green: 0.12, blue: 0.12 },
+    'Ingresos':           { red: 0.10, green: 0.40, blue: 0.35 },
+    'Categorías':         { red: 0.28, green: 0.28, blue: 0.32 },
+    'Cuotas':             { red: 0.10, green: 0.20, blue: 0.50 },
+  };
+  for (const [name, color] of Object.entries(tabColors)) {
+    if (sheetMap[name] !== undefined) {
+      requests.push({ updateSheetProperties: { properties: { sheetId: sheetMap[name], tabColorStyle: { rgbColor: color } }, fields: 'tabColorStyle' } });
+    }
+  }
+
+  await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+  console.log('Tema dark aplicado a todas las hojas.');
 }
 
 // === CUOTAS ===
@@ -1920,4 +2218,5 @@ module.exports = {
   setupCuotas, getCuotas, appendCuota, updateCuotaRegistradas, updateCuotaMonto,
   extendSheetLimits, setupFormatos, getPresupuestos,
   getSharedUnsettled, settleTransaction, setupSaldado, setupFrecuencia,
+  setupEstilosDark,
 };
