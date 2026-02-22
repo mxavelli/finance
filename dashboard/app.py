@@ -13,18 +13,82 @@ st.set_page_config(
     initial_sidebar_state='collapsed',
 )
 
-# CSS para mobile
-st.markdown("""<style>
-    .block-container { padding-top: 1rem; padding-bottom: 1rem; }
-    [data-testid="stMetric"] {
-        background: #f3f0ff; padding: 12px; border-radius: 12px;
-        box-shadow: 0 2px 6px rgba(126,184,218,0.15);
-        border-left: 4px solid #c3aed6;
-    }
-    [data-testid="stMetric"] label { font-size: 0.8rem; }
-    [data-testid="stSidebar"] { min-width: 260px; }
-    .stProgress > div > div { height: 8px; }
-</style>""", unsafe_allow_html=True)
+# Inicializar dark mode en session_state
+if 'dark_mode' not in st.session_state:
+    st.session_state.dark_mode = False
+
+dark = st.session_state.dark_mode
+
+# CSS dinámico según modo
+if dark:
+    st.markdown("""<style>
+        .block-container { padding-top: 1rem; padding-bottom: 1rem; }
+        /* Fondo general */
+        .stApp, [data-testid="stAppViewContainer"], .main {
+            background-color: #1C1C24 !important; color: #E0E3EB !important;
+        }
+        [data-testid="stSidebar"], [data-testid="stSidebar"] > div {
+            background-color: #262630 !important; color: #E0E3EB !important;
+        }
+        [data-testid="stHeader"] { background-color: #1C1C24 !important; }
+        /* Métricas */
+        [data-testid="stMetric"] {
+            background: #2E2E38 !important; padding: 12px; border-radius: 12px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            border-left: 4px solid #9966D9;
+        }
+        [data-testid="stMetric"] label { font-size: 0.8rem; color: #A0A4B8 !important; }
+        [data-testid="stMetric"] [data-testid="stMetricValue"] { color: #E0E3EB !important; }
+        [data-testid="stMetric"] [data-testid="stMetricDelta"] { opacity: 0.85; }
+        /* Textos y headers */
+        h1, h2, h3, h4, h5, h6, .stMarkdown, p, span, label, .stRadio label,
+        .stSelectbox label, [data-testid="stWidgetLabel"] {
+            color: #E0E3EB !important;
+        }
+        /* Expanders, tabs, dividers */
+        [data-testid="stExpander"] { background-color: #2E2E38 !important; border-color: #3A3A48 !important; }
+        [data-testid="stExpander"] summary { color: #E0E3EB !important; }
+        hr { border-color: #3A3A48 !important; }
+        /* Inputs */
+        .stSelectbox > div > div, .stNumberInput > div > div > input {
+            background-color: #2E2E38 !important; color: #E0E3EB !important;
+            border-color: #3A3A48 !important;
+        }
+        /* Botones */
+        .stButton > button {
+            background-color: #2E2E38 !important; color: #E0E3EB !important;
+            border-color: #3A3A48 !important;
+        }
+        .stButton > button:hover { background-color: #3A3A48 !important; }
+        /* Progress bars */
+        .stProgress > div > div { height: 8px; }
+        .stProgress > div { background-color: #3A3A48 !important; }
+        /* Info/warning boxes */
+        [data-testid="stAlert"] { background-color: #2E2E38 !important; color: #E0E3EB !important; }
+        [data-testid="stSidebar"] { min-width: 260px; }
+        /* Radio buttons */
+        .stRadio > div { color: #E0E3EB !important; }
+        /* Tabs */
+        .stTabs [data-baseweb="tab-list"] { background-color: #2E2E38 !important; }
+        .stTabs [data-baseweb="tab"] { color: #A0A4B8 !important; }
+        .stTabs [aria-selected="true"] { color: #E0E3EB !important; }
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1C1C24; }
+        ::-webkit-scrollbar-thumb { background: #3A3A48; border-radius: 4px; }
+    </style>""", unsafe_allow_html=True)
+else:
+    st.markdown("""<style>
+        .block-container { padding-top: 1rem; padding-bottom: 1rem; }
+        [data-testid="stMetric"] {
+            background: #f3f0ff; padding: 12px; border-radius: 12px;
+            box-shadow: 0 2px 6px rgba(126,184,218,0.15);
+            border-left: 4px solid #c3aed6;
+        }
+        [data-testid="stMetric"] label { font-size: 0.8rem; }
+        [data-testid="stSidebar"] { min-width: 260px; }
+        .stProgress > div > div { height: 8px; }
+    </style>""", unsafe_allow_html=True)
 
 from src.datos import (
     cargar_transacciones, filtrar_mes, cargar_gastos_fijos, cargar_cuotas,
@@ -67,6 +131,16 @@ with st.sidebar:
     if st.button('\U0001f504 Actualizar datos'):
         st.cache_data.clear()
         st.rerun()
+
+    st.divider()
+    if st.toggle('🌙 Modo oscuro', value=st.session_state.dark_mode):
+        if not st.session_state.dark_mode:
+            st.session_state.dark_mode = True
+            st.rerun()
+    else:
+        if st.session_state.dark_mode:
+            st.session_state.dark_mode = False
+            st.rerun()
 
 
 # ==================================================================
@@ -125,7 +199,7 @@ def render_resumen(mes, anio):
     labels = [k for k, v in tipos.items() if v > 0]
     values = [v for v in tipos.values() if v > 0]
     if labels:
-        st.plotly_chart(grafico_dona(labels, values, 'Distribución por tipo'),
+        st.plotly_chart(grafico_dona(labels, values, 'Distribución por tipo', dark=dark),
                         use_container_width=True)
 
 
@@ -157,11 +231,11 @@ def render_categorias(mes, anio):
 
     # Dona
     st.plotly_chart(grafico_dona(por_cat.index.tolist(), por_cat.values.tolist(),
-                                 'Distribución ARS'), use_container_width=True)
+                                 'Distribución ARS', dark=dark), use_container_width=True)
 
     # Barras
     st.plotly_chart(grafico_barras_h(por_cat.index.tolist(), por_cat.values.tolist(),
-                                     'Monto por categoría'), use_container_width=True)
+                                     'Monto por categoría', dark=dark), use_container_width=True)
 
     # USD si hay
     df_usd = df[df['moneda'] == 'USD']
@@ -169,7 +243,7 @@ def render_categorias(mes, anio):
         st.divider()
         por_cat_usd = df_usd.groupby('categoria')['monto'].sum().sort_values(ascending=False)
         st.plotly_chart(grafico_barras_h(por_cat_usd.index.tolist(), por_cat_usd.values.tolist(),
-                                         'Monto por categoría (USD)', es_usd=True),
+                                         'Monto por categoría (USD)', es_usd=True, dark=dark),
                         use_container_width=True)
 
 
@@ -195,11 +269,11 @@ def render_tendencias(mes, anio):
         totales_usd.append(df_m[df_m['moneda'] == 'USD']['monto'].sum())
 
     st.plotly_chart(grafico_lineas(meses_labels, {'Gasto ARS': totales_ars},
-                                   'Gasto ARS mensual'), use_container_width=True)
+                                   'Gasto ARS mensual', dark=dark), use_container_width=True)
 
     if any(v > 0 for v in totales_usd):
         st.plotly_chart(grafico_lineas(meses_labels, {'Gasto USD': totales_usd},
-                                       'Gasto USD mensual', es_usd=True),
+                                       'Gasto USD mensual', es_usd=True, dark=dark),
                         use_container_width=True)
 
     # Delta vs mes anterior
@@ -224,7 +298,7 @@ def render_tendencias(mes, anio):
         series[cat] = vals
     if series:
         st.plotly_chart(grafico_barras_apiladas(meses_labels, series,
-                                                 'Top 5 categorías por mes'),
+                                                 'Top 5 categorías por mes', dark=dark),
                         use_container_width=True)
 
 
@@ -277,7 +351,7 @@ def render_balance(mes, anio):
     # Gráfico de evolución
     if len(meses_chart) > 1:
         st.plotly_chart(grafico_lineas(meses_chart, {'Balance Moises': balances_chart},
-                                       'Evolución del balance'), use_container_width=True)
+                                       'Evolución del balance', dark=dark), use_container_width=True)
 
 
 # --- 5. Presupuesto vs real ---
@@ -333,6 +407,7 @@ def render_presupuesto(mes, anio):
         datos['categoria'].tolist(),
         datos['presupuesto'].tolist(),
         datos['real'].tolist(),
+        dark=dark,
     ), use_container_width=True)
 
     # Progress bars por categoría
@@ -370,11 +445,11 @@ def render_metodos(mes, anio):
 
     # Dona
     st.plotly_chart(grafico_dona(por_metodo.index.tolist(), por_metodo.values.tolist(),
-                                 'Distribución por método'), use_container_width=True)
+                                 'Distribución por método', dark=dark), use_container_width=True)
 
     # Barras
     st.plotly_chart(grafico_barras_h(por_metodo.index.tolist(), por_metodo.values.tolist(),
-                                     'Monto por método'), use_container_width=True)
+                                     'Monto por método', dark=dark), use_container_width=True)
 
     # USD si hay
     df_usd = df[df['moneda'] == 'USD']
@@ -559,11 +634,11 @@ def render_ahorro(mes, anio):
 
     if any(v > 0 for v in ahorro_ars_vals):
         st.plotly_chart(grafico_lineas(meses_labels, {'Ahorro ARS': ahorro_ars_vals},
-                                       'Ahorro ARS mensual'), use_container_width=True)
+                                       'Ahorro ARS mensual', dark=dark), use_container_width=True)
 
     if any(v > 0 for v in ahorro_usd_vals):
         st.plotly_chart(grafico_lineas(meses_labels, {'Ahorro USD': ahorro_usd_vals},
-                                       'Ahorro USD mensual', es_usd=True),
+                                       'Ahorro USD mensual', es_usd=True, dark=dark),
                         use_container_width=True)
 
     # Detalle transacciones de ahorro del mes
@@ -655,7 +730,7 @@ def render_comparativo(mes, anio):
         st.plotly_chart(grafico_barras_agrupadas(
             categorias,
             {'Moises': moises_vals, 'Oriana': oriana_vals},
-            'Gasto por categoría',
+            'Gasto por categoría', dark=dark,
         ), use_container_width=True)
 
     # Tabla resumen
