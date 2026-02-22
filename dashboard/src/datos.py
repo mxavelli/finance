@@ -380,6 +380,60 @@ def cargar_crypto_transacciones():
                  'precio_usd', 'total_usd', 'plataforma', 'notas'])
 
 
+# --- Helpers internos ---
+
+def _safe_float(val):
+    """Convierte a float de forma segura."""
+    if val is None or val == '':
+        return 0.0
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return parse_numero(val)
+
+
+def _safe_int(val):
+    """Convierte a int de forma segura."""
+    if val is None or val == '':
+        return 0
+    try:
+        return int(float(val))
+    except (ValueError, TypeError):
+        return 0
+
+
+def _parse_fecha_serial(val):
+    """Convierte un serial date de Google Sheets a datetime, o parsea string DD/MM/YYYY."""
+    if val is None or val == '':
+        return None
+    if isinstance(val, (int, float)) and val > 0:
+        # Google Sheets serial date: días desde 30/12/1899
+        try:
+            return datetime(1899, 12, 30) + pd.Timedelta(days=int(val))
+        except Exception:
+            return None
+    if isinstance(val, str):
+        # Intentar DD/MM/YYYY
+        try:
+            return datetime.strptime(val, '%d/%m/%Y')
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_hora_serial(val):
+    """Convierte un serial time de Google Sheets a string HH:MM."""
+    if val is None or val == '':
+        return ''
+    if isinstance(val, (int, float)):
+        # Fracción del día → horas:minutos
+        total_mins = round(val * 24 * 60)
+        h = total_mins // 60
+        m = total_mins % 60
+        return f'{h:02d}:{m:02d}'
+    return str(val)
+
+
 # --- Inversiones ---
 
 @st.cache_data(ttl=300)
@@ -433,57 +487,3 @@ def cargar_inversiones_historial():
         })
     return pd.DataFrame(rows) if rows else pd.DataFrame(
         columns=['fecha', 'valor_total', 'variacion', 'notas'])
-
-
-# --- Helpers internos ---
-
-def _safe_float(val):
-    """Convierte a float de forma segura."""
-    if val is None or val == '':
-        return 0.0
-    try:
-        return float(val)
-    except (ValueError, TypeError):
-        return parse_numero(val)
-
-
-def _safe_int(val):
-    """Convierte a int de forma segura."""
-    if val is None or val == '':
-        return 0
-    try:
-        return int(float(val))
-    except (ValueError, TypeError):
-        return 0
-
-
-def _parse_fecha_serial(val):
-    """Convierte un serial date de Google Sheets a datetime, o parsea string DD/MM/YYYY."""
-    if val is None or val == '':
-        return None
-    if isinstance(val, (int, float)) and val > 0:
-        # Google Sheets serial date: días desde 30/12/1899
-        try:
-            return datetime(1899, 12, 30) + pd.Timedelta(days=int(val))
-        except Exception:
-            return None
-    if isinstance(val, str):
-        # Intentar DD/MM/YYYY
-        try:
-            return datetime.strptime(val, '%d/%m/%Y')
-        except ValueError:
-            return None
-    return None
-
-
-def _parse_hora_serial(val):
-    """Convierte un serial time de Google Sheets a string HH:MM."""
-    if val is None or val == '':
-        return ''
-    if isinstance(val, (int, float)):
-        # Fracción del día → horas:minutos
-        total_mins = round(val * 24 * 60)
-        h = total_mins // 60
-        m = total_mins % 60
-        return f'{h:02d}:{m:02d}'
-    return str(val)
