@@ -9,3 +9,4 @@ dashboard/venv/
 __pycache__/
 docs/extractos-moises/
 docs/gastos-recurrentes-moises.md
+*.csv

@@ -233,7 +233,7 @@ function parseLocalNumber(val) {
 async function getGastosFijos() {
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: config.sheetId,
-    range: 'Gastos Fijos!A2:H',
+    range: 'Gastos Fijos!A2:J',
   });
   const rows = response.data.values || [];
 
@@ -248,6 +248,8 @@ async function getGastosFijos() {
       tipo: r[5] || '',
       dia: r[6] || '',
       registrado: (r[7] || '').includes('✅'),
+      frecuencia: r[8] || 'Mensual',
+      meses: r[9] || '',
     }))
     .filter(g => g.descripcion);
 }
@@ -1784,6 +1786,53 @@ async function setupFormatos() {
   console.log('Formato numérico aplicado a todas las columnas monetarias.');
 }
 
+// Ejecutar una sola vez con: node -e "require('./src/sheets').setupFrecuencia()"
+// Agrega columnas Frecuencia (I) y Meses (J) a Gastos Fijos,
+// setea "Mensual" en todos los existentes, y carga suscripciones Deel.
+async function setupFrecuencia() {
+  const spreadsheetId = config.sheetId;
+  const data = [];
+
+  // Headers I1 y J1
+  data.push({ range: "'Gastos Fijos'!I1:J1", values: [['Frecuencia', 'Meses']] });
+
+  // "Mensual" para todas las filas existentes (2-34)
+  const mensualRows = [];
+  for (let i = 0; i < 33; i++) mensualRows.push(['Mensual', '']);
+  data.push({ range: "'Gastos Fijos'!I2:J34", values: mensualRows });
+
+  // Nuevas suscripciones Deel (filas 35-41)
+  const nuevos = [
+    // [Descripción, Categoría, Monto, Moneda, Método, Tipo, Día, (H=fórmula skip), Frecuencia, Meses]
+    ['Discord Nitro', 'Entretenimiento', 5.15, 'USD', 'Deel USD', 'Individual Moises', '16', '', 'Mensual', ''],
+    ['Discord Server Boost', 'Entretenimiento', 3.49, 'USD', 'Deel USD', 'Individual Moises', '31', '', 'Mensual', ''],
+    ['Microsoft 365', 'Servicios', 3699, 'ARS', 'Deel Card', 'Individual Moises', '26', '', 'Mensual', ''],
+    ['Xbox Game Pass', 'Entretenimiento', 24999, 'ARS', 'Deel Card', 'Individual Moises', '22', '', 'Mensual', ''],
+    ['GearUp Portal', 'Entretenimiento', 10, 'USD', 'Deel USD', 'Individual Moises', '', '', 'Trimestral', '2,5,8,11'],
+    ['1Password', 'Servicios', 60, 'USD', 'Deel USD', 'Individual Moises', '', '', 'Anual', '6'],
+    ['Krisp', 'Servicios', 192, 'USD', 'Deel USD', 'Individual Moises', '', '', 'Anual', '7'],
+  ];
+
+  // Escribir A-G (datos) para filas 35-41
+  data.push({
+    range: "'Gastos Fijos'!A35:G41",
+    values: nuevos.map(n => [n[0], n[1], n[2], n[3], n[4], n[5], n[6]]),
+  });
+
+  // Escribir I-J (frecuencia/meses) para filas 35-41
+  data.push({
+    range: "'Gastos Fijos'!I35:J41",
+    values: nuevos.map(n => [n[8], n[9]]),
+  });
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: { valueInputOption: 'USER_ENTERED', data },
+  });
+
+  console.log('setupFrecuencia completado: columnas I/J + 7 suscripciones Deel agregadas.');
+}
+
 // Lee transacciones compartidas ARS no saldadas del año actual.
 // Retorna array ordenado por fecha desc con row number para escribir en columna Q.
 async function getSharedUnsettled() {
@@ -1870,5 +1919,5 @@ module.exports = {
   deleteTransaction, getIncomeStatus, registerIncome, getCurrentIncome, updateIncome, getFlowData,
   setupCuotas, getCuotas, appendCuota, updateCuotaRegistradas, updateCuotaMonto,
   extendSheetLimits, setupFormatos, getPresupuestos,
-  getSharedUnsettled, settleTransaction, setupSaldado,
+  getSharedUnsettled, settleTransaction, setupSaldado, setupFrecuencia,
 };

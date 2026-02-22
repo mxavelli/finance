@@ -371,10 +371,11 @@ bot.command('resumen', cmdResumen);
 async function cmdGastosFijos(ctx) {
   try {
     const { month, year } = getNowBA();
-    const gastos = await getGastosFijos();
+    const allGastos = await getGastosFijos();
+    const gastos = filterGastosByFrequency(allGastos, month);
 
     if (gastos.length === 0) {
-      return ctx.reply('No hay gastos fijos configurados.');
+      return ctx.reply('No hay gastos fijos para este mes.');
     }
 
     let text = `📋 *Gastos Fijos — ${MESES_CORTO[month - 1]} ${year}*\n\n`;
@@ -540,7 +541,7 @@ async function cmdRegistrarFijos(ctx) {
     const { month, year } = getNowBA();
     const [gastos, cuotas] = await Promise.all([getGastosFijos(), getCuotas()]);
 
-    const pendientesGF = filterGastosForUser(gastos.filter(g => !g.registrado), ctx.from.id);
+    const pendientesGF = filterGastosForUser(filterGastosByFrequency(gastos.filter(g => !g.registrado), month), ctx.from.id);
     const pendientesCuotas = filterCuotasForUser(getPendingCuotasForMonth(cuotas, month, year), ctx.from.id);
 
     if (pendientesGF.length === 0 && pendientesCuotas.length === 0) {
@@ -1452,6 +1453,18 @@ bot.callbackQuery(/^sal_(no|cancel):(\d+)$/, async (ctx) => {
 // Helper: filtrar gastos fijos relevantes para un usuario
 // Moises ve Individual Moises + Compartido, Oriana ve Individual Oriana + Compartido
 // Comparación case-insensitive y tolerante a variantes. Items sin tipo → visibles para ambos.
+// Filtra gastos fijos que aplican al mes indicado según su frecuencia.
+// Mensual → siempre. Anual → solo si month está en meses. Trimestral → idem.
+function filterGastosByFrequency(gastos, month) {
+  return gastos.filter(g => {
+    const freq = (g.frecuencia || 'Mensual').trim();
+    if (freq === 'Mensual') return true;
+    const meses = (g.meses || '').split(',').map(m => parseInt(m.trim())).filter(m => !isNaN(m));
+    if (meses.length === 0) return true;
+    return meses.includes(month);
+  });
+}
+
 function filterGastosForUser(gastos, userId) {
   const esMoises = userId === config.moisesId;
   return gastos.filter(g => {
@@ -1909,7 +1922,7 @@ async function checkFixedExpensesReminder() {
     const { month, year } = getNowBA();
     const [gastos, cuotas] = await Promise.all([getGastosFijos(), getCuotas()]);
 
-    const pendientes = gastos.filter(g => !g.registrado);
+    const pendientes = filterGastosByFrequency(gastos.filter(g => !g.registrado), month);
     const pendientesCuotas = getPendingCuotasForMonth(cuotas, month, year);
 
     if (pendientes.length === 0 && pendientesCuotas.length === 0) return;
