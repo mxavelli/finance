@@ -174,6 +174,28 @@ with st.sidebar:
 
 
 # ==================================================================
+# HELPERS DE FILTRO POR USUARIO
+# ==================================================================
+
+def _col_monto(df):
+    """Retorna la columna de monto según el usuario seleccionado."""
+    if usuario == 'Moises':
+        return df['monto_moises']
+    elif usuario == 'Oriana':
+        return df['monto_oriana']
+    return df['monto']
+
+
+def _filtrar_tipo(df):
+    """Filtra transacciones según usuario: incluye individuales + compartidos."""
+    if usuario == 'Moises':
+        return df[df['tipo'].str.contains('moises|compartido', case=False, na=False)]
+    elif usuario == 'Oriana':
+        return df[df['tipo'].str.contains('oriana|compartido', case=False, na=False)]
+    return df
+
+
+# ==================================================================
 # SECCIONES
 # ==================================================================
 
@@ -292,21 +314,18 @@ def render_categorias(mes, anio):
         st.info('No hay transacciones para este mes.')
         return
 
-    filtro = st.segmented_control('Filtrar por', ['Todos', 'Moises', 'Oriana', 'Compartido'],
-                                  default='Todos')
-    if filtro == 'Moises':
-        df = df[df['tipo'].str.contains('moises', case=False, na=False)]
-    elif filtro == 'Oriana':
-        df = df[df['tipo'].str.contains('oriana', case=False, na=False)]
-    elif filtro == 'Compartido':
-        df = df[df['tipo'].str.contains('compartido', case=False, na=False)]
-
     df_ars = df[df['moneda'] == 'ARS']
     if df_ars.empty:
-        st.info('No hay gastos ARS con este filtro.')
+        st.info('No hay gastos ARS.')
         return
 
-    por_cat = df_ars.groupby('categoria')['monto'].sum().sort_values(ascending=False)
+    col_monto = 'monto_moises' if usuario == 'Moises' else 'monto_oriana' if usuario == 'Oriana' else 'monto'
+    por_cat = df_ars.groupby('categoria')[col_monto].sum().sort_values(ascending=False)
+    por_cat = por_cat[por_cat > 0]
+
+    if por_cat.empty:
+        st.info('No hay gastos ARS para este usuario.')
+        return
 
     # Dona
     st.plotly_chart(grafico_dona(por_cat.index.tolist(), por_cat.values.tolist(),
@@ -316,14 +335,15 @@ def render_categorias(mes, anio):
     st.plotly_chart(grafico_barras_h(por_cat.index.tolist(), por_cat.values.tolist(),
                                      'Monto por categoría', dark=dark), use_container_width=True)
 
-    # USD si hay
-    df_usd = df[df['moneda'] == 'USD']
-    if not df_usd.empty:
-        st.divider()
-        por_cat_usd = df_usd.groupby('categoria')['monto'].sum().sort_values(ascending=False)
-        st.plotly_chart(grafico_barras_h(por_cat_usd.index.tolist(), por_cat_usd.values.tolist(),
-                                         'Monto por categoría (USD)', es_usd=True, dark=dark),
-                        use_container_width=True)
+    # USD si hay (solo Moises o Todos)
+    if usuario != 'Oriana':
+        df_usd = df[df['moneda'] == 'USD']
+        if not df_usd.empty:
+            st.divider()
+            por_cat_usd = df_usd.groupby('categoria')['monto'].sum().sort_values(ascending=False)
+            st.plotly_chart(grafico_barras_h(por_cat_usd.index.tolist(), por_cat_usd.values.tolist(),
+                                             'Monto por categoría (USD)', es_usd=True, dark=dark),
+                            use_container_width=True)
 
 
 # --- 3. Tendencias mensuales ---
@@ -337,6 +357,8 @@ def render_tendencias(mes, anio):
         st.info('No hay transacciones para este año.')
         return
 
+    col_monto = 'monto_moises' if usuario == 'Moises' else 'monto_oriana' if usuario == 'Oriana' else 'monto'
+
     # Totales por mes
     meses_labels = []
     totales_ars = []
@@ -344,13 +366,14 @@ def render_tendencias(mes, anio):
     for m in range(1, 13):
         df_m = df_anio[df_anio['mes'] == m]
         meses_labels.append(nombre_mes_corto(m))
-        totales_ars.append(df_m[df_m['moneda'] == 'ARS']['monto'].sum())
-        totales_usd.append(df_m[df_m['moneda'] == 'USD']['monto'].sum())
+        totales_ars.append(df_m[df_m['moneda'] == 'ARS'][col_monto].sum())
+        if usuario != 'Oriana':
+            totales_usd.append(df_m[df_m['moneda'] == 'USD']['monto'].sum())
 
     st.plotly_chart(grafico_lineas(meses_labels, {'Gasto ARS': totales_ars},
                                    'Gasto ARS mensual', dark=dark), use_container_width=True)
 
-    if any(v > 0 for v in totales_usd):
+    if usuario != 'Oriana' and any(v > 0 for v in totales_usd):
         st.plotly_chart(grafico_lineas(meses_labels, {'Gasto USD': totales_usd},
                                        'Gasto USD mensual', es_usd=True, dark=dark),
                         use_container_width=True)
@@ -368,12 +391,12 @@ def render_tendencias(mes, anio):
     # Top 5 categorías apiladas
     st.divider()
     df_ars = df_anio[df_anio['moneda'] == 'ARS']
-    top5 = df_ars.groupby('categoria')['monto'].sum().nlargest(5).index.tolist()
+    top5 = df_ars.groupby('categoria')[col_monto].sum().nlargest(5).index.tolist()
     series = {}
     for cat in top5:
         vals = []
         for m in range(1, 13):
-            vals.append(df_ars[(df_ars['mes'] == m) & (df_ars['categoria'] == cat)]['monto'].sum())
+            vals.append(df_ars[(df_ars['mes'] == m) & (df_ars['categoria'] == cat)][col_monto].sum())
         series[cat] = vals
     if series:
         st.plotly_chart(grafico_barras_apiladas(meses_labels, series,
@@ -438,8 +461,9 @@ def render_balance(mes, anio):
 def render_presupuesto(mes, anio):
     st.header(f'Presupuesto vs real — {nombre_mes(mes)}')
 
+    default_pres = 'Oriana ARS' if usuario == 'Oriana' else 'Moises ARS'
     vista = st.segmented_control('Sección', ['Moises ARS', 'Oriana ARS', 'Compartido ARS', 'Moises USD'],
-                                 default='Moises ARS')
+                                 default=default_pres)
 
     es_usd = vista == 'Moises USD'
     if es_usd:
@@ -508,8 +532,11 @@ def render_metodos(mes, anio):
         st.info('No hay transacciones para este mes.')
         return
 
+    col_monto = 'monto_moises' if usuario == 'Moises' else 'monto_oriana' if usuario == 'Oriana' else 'monto'
+
     df_ars = df[df['moneda'] == 'ARS']
-    por_metodo = df_ars.groupby('metodo_pago')['monto'].sum().sort_values(ascending=False)
+    por_metodo = df_ars.groupby('metodo_pago')[col_monto].sum().sort_values(ascending=False)
+    por_metodo = por_metodo[por_metodo > 0]
 
     if por_metodo.empty:
         st.info('No hay gastos ARS este mes.')
@@ -530,14 +557,15 @@ def render_metodos(mes, anio):
     st.plotly_chart(grafico_barras_h(por_metodo.index.tolist(), por_metodo.values.tolist(),
                                      'Monto por método', dark=dark), use_container_width=True)
 
-    # USD si hay
-    df_usd = df[df['moneda'] == 'USD']
-    if not df_usd.empty:
-        por_metodo_usd = df_usd.groupby('metodo_pago')['monto'].sum()
-        st.divider()
-        st.subheader('Gastos USD')
-        for metodo, monto in por_metodo_usd.items():
-            st.metric(metodo, formato_usd(monto))
+    # USD si hay (solo Moises o Todos)
+    if usuario != 'Oriana':
+        df_usd = df[df['moneda'] == 'USD']
+        if not df_usd.empty:
+            por_metodo_usd = df_usd.groupby('metodo_pago')['monto'].sum()
+            st.divider()
+            st.subheader('Gastos USD')
+            for metodo, monto in por_metodo_usd.items():
+                st.metric(metodo, formato_usd(monto))
 
 
 # --- 7. Cuotas activas ---
@@ -548,6 +576,16 @@ def render_cuotas(mes, anio):
     df = cargar_cuotas()
     if df.empty:
         st.info('No hay cuotas registradas.')
+        return
+
+    # Filtrar por tarjetas del usuario
+    if usuario == 'Moises':
+        df = df[df['tarjeta'].isin(['Visa Galicia', 'Master Galicia'])]
+    elif usuario == 'Oriana':
+        df = df[df['tarjeta'].isin(['Visa BBVA', 'Master BBVA'])]
+
+    if df.empty:
+        st.info('No hay cuotas para este usuario.')
         return
 
     activas = df[~df['estado'].str.contains('Completada', case=False, na=False)]
@@ -589,9 +627,9 @@ def render_flujo(mes, anio):
     df = filtrar_mes(cargar_transacciones(), mes, anio)
     ing_m = cargar_ingresos_moises()
     ing_o = cargar_ingresos_oriana()
-
-    # Ingresos del mes (0-indexed row = mes - 1)
     idx = mes - 1
+
+    col_monto = 'monto_moises' if usuario == 'Moises' else 'monto_oriana' if usuario == 'Oriana' else 'monto'
 
     # Moises
     recibido_m = 0
@@ -610,29 +648,37 @@ def render_flujo(mes, anio):
     if idx < len(ing_o):
         ingreso_o = ing_o.iloc[idx]['ingreso_ars']
 
-    total_ingresos_ars = recibido_m + ingreso_o
-    total_gastos_ars = df[df['moneda'] == 'ARS']['monto'].sum() if not df.empty else 0
-    sobrante_ars = total_ingresos_ars - total_gastos_ars
+    # Calcular según usuario
+    if usuario == 'Moises':
+        total_ingresos_ars = recibido_m
+        total_gastos_ars = df[df['moneda'] == 'ARS'][col_monto].sum() if not df.empty else 0
+    elif usuario == 'Oriana':
+        total_ingresos_ars = ingreso_o
+        total_gastos_ars = df[df['moneda'] == 'ARS'][col_monto].sum() if not df.empty else 0
+    else:
+        total_ingresos_ars = recibido_m + ingreso_o
+        total_gastos_ars = df[df['moneda'] == 'ARS']['monto'].sum() if not df.empty else 0
 
+    sobrante_ars = total_ingresos_ars - total_gastos_ars
     total_gastos_usd = df[df['moneda'] == 'USD']['monto'].sum() if not df.empty else 0
 
     # Sección ARS
     st.subheader('ARS')
-    c1, c2 = st.columns(2)
-    c1.metric('Ingresó Moises', formato_ars(recibido_m))
-    c2.metric('Ingresó Oriana', formato_ars(ingreso_o))
-
-    st.metric('Total Ingresos ARS', formato_ars(total_ingresos_ars))
+    if usuario == 'Todos':
+        c1, c2 = st.columns(2)
+        c1.metric('Ingresó Moises', formato_ars(recibido_m))
+        c2.metric('Ingresó Oriana', formato_ars(ingreso_o))
+    st.metric('Ingreso ARS', formato_ars(total_ingresos_ars))
 
     # Desglose gastos ARS por tipo de pago
     if not df.empty:
         df_ars = df[df['moneda'] == 'ARS']
         tarjetas_total = df_ars[df_ars['metodo_pago'].isin(
             ['Visa Galicia', 'Master Galicia', 'Visa BBVA', 'Master BBVA', 'Tarjeta']
-        )]['monto'].sum()
-        deel_card = df_ars[df_ars['metodo_pago'] == 'Deel Card']['monto'].sum()
-        banco = df_ars[df_ars['metodo_pago'] == 'Banco']['monto'].sum()
-        efectivo = df_ars[df_ars['metodo_pago'] == 'Efectivo']['monto'].sum()
+        )][col_monto].sum()
+        deel_card = df_ars[df_ars['metodo_pago'] == 'Deel Card'][col_monto].sum()
+        banco = df_ars[df_ars['metodo_pago'] == 'Banco'][col_monto].sum()
+        efectivo = df_ars[df_ars['metodo_pago'] == 'Efectivo'][col_monto].sum()
 
         st.metric('Gastado ARS', formato_ars(total_gastos_ars))
         with st.expander('Desglose'):
@@ -644,7 +690,13 @@ def render_flujo(mes, anio):
     # Gastos fijos estimados
     df_fijos = cargar_gastos_fijos()
     if not df_fijos.empty:
-        fijos_ars = df_fijos[df_fijos['moneda'] == 'ARS']['monto'].sum()
+        if usuario == 'Moises':
+            df_fijos_f = df_fijos[df_fijos['tipo'].str.contains('moises|compartido', case=False, na=False)]
+        elif usuario == 'Oriana':
+            df_fijos_f = df_fijos[df_fijos['tipo'].str.contains('oriana|compartido', case=False, na=False)]
+        else:
+            df_fijos_f = df_fijos
+        fijos_ars = df_fijos_f[df_fijos_f['moneda'] == 'ARS']['monto'].sum()
         st.metric('Gastos Fijos estimados', formato_ars(fijos_ars))
 
     color_sobrante = 'normal' if sobrante_ars >= 0 else 'inverse'
@@ -652,17 +704,17 @@ def render_flujo(mes, anio):
               delta=f'{sobrante_ars / total_ingresos_ars * 100:.0f}% del ingreso' if total_ingresos_ars > 0 else None,
               delta_color=color_sobrante)
 
-    st.divider()
+    # Sección USD (solo Moises o Todos)
+    if usuario != 'Oriana':
+        st.divider()
+        st.subheader('USD')
+        c1, c2 = st.columns(2)
+        c1.metric('Salario USD', formato_usd(salario_usd))
+        c2.metric('Transferido a ARS', formato_usd(transferido_usd))
 
-    # Sección USD
-    st.subheader('USD')
-    c1, c2 = st.columns(2)
-    c1.metric('Salario USD', formato_usd(salario_usd))
-    c2.metric('Transferido a ARS', formato_usd(transferido_usd))
-
-    c3, c4 = st.columns(2)
-    c3.metric('Gastado USD', formato_usd(total_gastos_usd))
-    c4.metric('Queda en Deel', formato_usd(queda_deel))
+        c3, c4 = st.columns(2)
+        c3.metric('Gastado USD', formato_usd(total_gastos_usd))
+        c4.metric('Queda en Deel', formato_usd(queda_deel))
 
 
 # --- 9. Ahorro ---
@@ -675,29 +727,37 @@ def render_ahorro(mes, anio):
         st.info('No hay transacciones.')
         return
 
+    col_monto = 'monto_moises' if usuario == 'Moises' else 'monto_oriana' if usuario == 'Oriana' else 'monto'
+
     df_ahorro = df[df['categoria'].str.contains('Ahorro', case=False, na=False)]
     df_ahorro_anio = df_ahorro[df_ahorro['anio'] == anio]
     df_ahorro_mes = df_ahorro_anio[df_ahorro_anio['mes'] == mes]
 
     # Ahorro del mes
-    ahorro_ars_mes = df_ahorro_mes[df_ahorro_mes['moneda'] == 'ARS']['monto'].sum()
-    ahorro_usd_mes = df_ahorro_mes[df_ahorro_mes['moneda'] == 'USD']['monto'].sum()
+    ahorro_ars_mes = df_ahorro_mes[df_ahorro_mes['moneda'] == 'ARS'][col_monto].sum()
 
     st.subheader(f'{nombre_mes(mes)}')
-    c1, c2 = st.columns(2)
-    c1.metric('Ahorro ARS', formato_ars(ahorro_ars_mes))
-    c2.metric('Ahorro USD', formato_usd(ahorro_usd_mes))
+    if usuario != 'Oriana':
+        ahorro_usd_mes = df_ahorro_mes[df_ahorro_mes['moneda'] == 'USD']['monto'].sum()
+        c1, c2 = st.columns(2)
+        c1.metric('Ahorro ARS', formato_ars(ahorro_ars_mes))
+        c2.metric('Ahorro USD', formato_usd(ahorro_usd_mes))
+    else:
+        st.metric('Ahorro ARS', formato_ars(ahorro_ars_mes))
 
     st.divider()
 
     # Ahorro acumulado del año
-    ahorro_ars_acum = df_ahorro_anio[df_ahorro_anio['moneda'] == 'ARS']['monto'].sum()
-    ahorro_usd_acum = df_ahorro_anio[df_ahorro_anio['moneda'] == 'USD']['monto'].sum()
+    ahorro_ars_acum = df_ahorro_anio[df_ahorro_anio['moneda'] == 'ARS'][col_monto].sum()
 
     st.subheader(f'Acumulado {anio}')
-    c1, c2 = st.columns(2)
-    c1.metric('Ahorro ARS (año)', formato_ars(ahorro_ars_acum))
-    c2.metric('Ahorro USD (año)', formato_usd(ahorro_usd_acum))
+    if usuario != 'Oriana':
+        ahorro_usd_acum = df_ahorro_anio[df_ahorro_anio['moneda'] == 'USD']['monto'].sum()
+        c1, c2 = st.columns(2)
+        c1.metric('Ahorro ARS (año)', formato_ars(ahorro_ars_acum))
+        c2.metric('Ahorro USD (año)', formato_usd(ahorro_usd_acum))
+    else:
+        st.metric('Ahorro ARS (año)', formato_ars(ahorro_ars_acum))
 
     st.divider()
 
@@ -708,14 +768,15 @@ def render_ahorro(mes, anio):
     for m in range(1, 13):
         df_m = df_ahorro_anio[df_ahorro_anio['mes'] == m]
         meses_labels.append(nombre_mes_corto(m))
-        ahorro_ars_vals.append(df_m[df_m['moneda'] == 'ARS']['monto'].sum())
-        ahorro_usd_vals.append(df_m[df_m['moneda'] == 'USD']['monto'].sum())
+        ahorro_ars_vals.append(df_m[df_m['moneda'] == 'ARS'][col_monto].sum())
+        if usuario != 'Oriana':
+            ahorro_usd_vals.append(df_m[df_m['moneda'] == 'USD']['monto'].sum())
 
     if any(v > 0 for v in ahorro_ars_vals):
         st.plotly_chart(grafico_lineas(meses_labels, {'Ahorro ARS': ahorro_ars_vals},
                                        'Ahorro ARS mensual', dark=dark), use_container_width=True)
 
-    if any(v > 0 for v in ahorro_usd_vals):
+    if usuario != 'Oriana' and any(v > 0 for v in ahorro_usd_vals):
         st.plotly_chart(grafico_lineas(meses_labels, {'Ahorro USD': ahorro_usd_vals},
                                        'Ahorro USD mensual', es_usd=True, dark=dark),
                         use_container_width=True)
@@ -726,47 +787,53 @@ def render_ahorro(mes, anio):
         st.subheader('Detalle')
         for _, row in df_ahorro_mes.iterrows():
             st.markdown(
-                f"- {row['descripcion']} — {formato_moneda(row['monto'], row['moneda'])} "
+                f"- {row['descripcion']} — {formato_moneda(row[col_monto], row['moneda'])} "
                 f"({row['metodo_pago']})"
             )
 
-    # Subsección crypto en ahorro
-    try:
-        df_crypto = cargar_crypto_holdings()
-        if not df_crypto.empty and df_crypto['cantidad'].sum() > 0:
-            st.divider()
-            st.subheader('Crypto')
-            df_active = df_crypto[df_crypto['cantidad'] > 0]
-            total_crypto = df_active['valor_usd'].sum()
-            st.metric('Total Crypto', formato_usd(total_crypto))
-            for _, h in df_active.iterrows():
-                st.markdown(
-                    f"- **{h['nombre']} ({h['simbolo']})**: {h['cantidad']:.6f} "
-                    f"@ {formato_usd(h['precio_usd'])} = {formato_usd(h['valor_usd'])}"
-                )
-    except Exception:
-        pass
+    # Subsección crypto en ahorro (solo Moises o Todos — crypto es de Moises)
+    if usuario != 'Oriana':
+        try:
+            df_crypto = cargar_crypto_holdings()
+            if not df_crypto.empty and df_crypto['cantidad'].sum() > 0:
+                st.divider()
+                st.subheader('Crypto')
+                df_active = df_crypto[df_crypto['cantidad'] > 0]
+                total_crypto = df_active['valor_usd'].sum()
+                st.metric('Total Crypto', formato_usd(total_crypto))
+                for _, h in df_active.iterrows():
+                    st.markdown(
+                        f"- **{h['nombre']} ({h['simbolo']})**: {h['cantidad']:.6f} "
+                        f"@ {formato_usd(h['precio_usd'])} = {formato_usd(h['valor_usd'])}"
+                    )
+        except Exception:
+            pass
 
-    # Subsección inversiones en ahorro
-    try:
-        inv = cargar_inversiones()
-        if inv['total'] > 0:
-            st.divider()
-            st.subheader('Inversiones (PPI)')
-            st.metric('Total en PPI', formato_ars(inv['total']))
-            df_tipos = inv['tipos']
-            if not df_tipos.empty:
-                for _, t in df_tipos[df_tipos['porcentaje'] > 0].iterrows():
-                    pct = f"{t['porcentaje'] * 100:.2f}%"
-                    st.markdown(f"- **{t['tipo']}**: {pct} ({formato_ars(t['valor_ars'])})")
-    except Exception:
-        pass
+    # Subsección inversiones en ahorro (solo Moises o Todos — PPI es de Moises)
+    if usuario != 'Oriana':
+        try:
+            inv = cargar_inversiones()
+            if inv['total'] > 0:
+                st.divider()
+                st.subheader('Inversiones (PPI)')
+                st.metric('Total en PPI', formato_ars(inv['total']))
+                df_tipos = inv['tipos']
+                if not df_tipos.empty:
+                    for _, t in df_tipos[df_tipos['porcentaje'] > 0].iterrows():
+                        pct = f"{t['porcentaje'] * 100:.2f}%"
+                        st.markdown(f"- **{t['tipo']}**: {pct} ({formato_ars(t['valor_ars'])})")
+        except Exception:
+            pass
 
 
 # --- 10. Crypto ---
 
 def render_crypto(mes, anio):
     st.header('Portafolio Crypto')
+
+    if usuario == 'Oriana':
+        st.info('El portafolio crypto es administrado por Moises.')
+        return
 
     try:
         df_holdings = cargar_crypto_holdings()
@@ -825,6 +892,10 @@ def render_crypto(mes, anio):
 
 def render_inversiones(mes, anio):
     st.header('Portafolio de Inversiones')
+
+    if usuario == 'Oriana':
+        st.info('El portafolio de inversiones (PPI) es administrado por Moises.')
+        return
 
     try:
         inv = cargar_inversiones()
@@ -902,6 +973,16 @@ def render_fijos(mes, anio):
     df = cargar_gastos_fijos()
     if df.empty:
         st.info('No hay gastos fijos configurados.')
+        return
+
+    # Filtrar por usuario
+    if usuario == 'Moises':
+        df = df[df['tipo'].str.contains('moises|compartido', case=False, na=False)]
+    elif usuario == 'Oriana':
+        df = df[df['tipo'].str.contains('oriana|compartido', case=False, na=False)]
+
+    if df.empty:
+        st.info('No hay gastos fijos para este usuario.')
         return
 
     registrados = df[df['registrado']]
