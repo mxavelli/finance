@@ -1784,10 +1784,91 @@ async function setupFormatos() {
   console.log('Formato numérico aplicado a todas las columnas monetarias.');
 }
 
+// Lee transacciones compartidas ARS no saldadas del año actual.
+// Retorna array ordenado por fecha desc con row number para escribir en columna Q.
+async function getSharedUnsettled() {
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: config.sheetId,
+    range: 'Transacciones!A2:Q',
+  });
+  const rows = response.data.values || [];
+
+  return rows
+    .map((r, i) => ({
+      row: i + 2,
+      fecha: r[0] || '',
+      descripcion: r[2] || '',
+      monto: parseFloat(r[4]) || 0,
+      moneda: r[5] || '',
+      tipo: r[7] || '',
+      pagadoPor: r[8] || '',
+      splitMoises: parseFloat(r[9]) || 0,
+      splitOriana: parseFloat(r[10]) || 0,
+      saldado: r[16] || '',
+    }))
+    .filter(tx => tx.fecha && tx.tipo === 'Compartido' && tx.moneda === 'ARS' && tx.saldado !== 'Sí')
+    .reverse();
+}
+
+// Marca una transacción como saldada escribiendo "Sí" en columna Q.
+async function settleTransaction(rowNumber) {
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: config.sheetId,
+    range: `Transacciones!Q${rowNumber}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [['Sí']] },
+  });
+}
+
+// Ejecutar una sola vez con: node -e "require('./src/sheets').setupSaldado()"
+// Agrega header "Saldado" en Q1 y actualiza fórmulas de Balance Compartido
+// para excluir transacciones saldadas.
+async function setupSaldado() {
+  const spreadsheetId = config.sheetId;
+  function loc(f) { return f.replace(/,/g, ';'); }
+
+  const MAX = 200;
+  const data = [];
+
+  // Header "Saldado" en Transacciones Q1
+  data.push({ range: 'Transacciones!Q1', values: [['Saldado']] });
+
+  // Reescribir fórmulas de Balance Compartido B5:H16 (12 meses)
+  // Agrega condición: Transacciones!$Q$2:$Q$200,"<>Sí" a cada SUMIFS
+  const q = `,Transacciones!$Q$2:$Q$${MAX},"<>Sí"`;
+  for (let i = 0; i < 12; i++) {
+    const bRow = 5 + i;
+    const mes = i + 1;
+    const b = `,Transacciones!$M$2:$M$${MAX},${mes},Transacciones!$N$2:$N$${MAX},$B$1${q})`;
+    const f = `Transacciones!$H$2:$H$${MAX},"Compartido",Transacciones!$F$2:$F$${MAX},"ARS"`;
+
+    data.push({
+      range: `'Balance Compartido'!B${bRow}:H${bRow}`,
+      values: [[
+        loc(`=SUMIFS(Transacciones!$E$2:$E$${MAX},${f}${b}`),
+        loc(`=SUMIFS(Transacciones!$E$2:$E$${MAX},${f},Transacciones!$I$2:$I$${MAX},"Moises"${b}`),
+        loc(`=SUMIFS(Transacciones!$E$2:$E$${MAX},${f},Transacciones!$I$2:$I$${MAX},"Oriana"${b}`),
+        loc(`=SUMIFS(Transacciones!$O$2:$O$${MAX},${f}${b}`),
+        loc(`=SUMIFS(Transacciones!$P$2:$P$${MAX},${f}${b}`),
+        loc(`=C${bRow}-E${bRow}`),
+        loc(`=IF(B${bRow}=0,"",IF(G${bRow}>0,"Oriana debe $"&TEXT(ABS(G${bRow}),"#,##0")&" a Moises",IF(G${bRow}<0,"Moises debe $"&TEXT(ABS(G${bRow}),"#,##0")&" a Oriana","Están a mano")))`),
+      ]],
+    });
+  }
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: { valueInputOption: 'USER_ENTERED', data },
+  });
+
+  console.log('setupSaldado completado: header Q1 + fórmulas Balance Compartido actualizadas.');
+}
+
 module.exports = {
   sheets, testConnection, appendTransaction, setupPhase4, setupDashboard, setupDashboardCards, setupEstilos,
   getBalance, getMonthlyTransactions, getGastosFijos, updateGastoFijoMonto, getLastTransactions,
   deleteTransaction, getIncomeStatus, registerIncome, getCurrentIncome, updateIncome, getFlowData,
   setupCuotas, getCuotas, appendCuota, updateCuotaRegistradas, updateCuotaMonto,
   extendSheetLimits, setupFormatos, getPresupuestos,
+  getSharedUnsettled, settleTransaction, setupSaldado,
 };

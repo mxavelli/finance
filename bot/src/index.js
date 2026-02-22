@@ -8,7 +8,7 @@ const {
   getGastosFijos, updateGastoFijoMonto, getLastTransactions, deleteTransaction,
   getIncomeStatus, registerIncome, getCurrentIncome, updateIncome, getFlowData,
   getCuotas, appendCuota, updateCuotaRegistradas, updateCuotaMonto,
-  getPresupuestos,
+  getPresupuestos, getSharedUnsettled, settleTransaction,
 } = require('./sheets');
 const { getCategories } = require('./categories');
 const { parseTransaction, formatAmount } = require('./parser');
@@ -31,6 +31,7 @@ const pendingIncome = new Map();    // Ingresos extras pendientes
 const pendingFijos = new Map();     // Gastos fijos pendientes de registro
 const pendingFixedEdit = new Map(); // Edicion de monto de gasto fijo (userId → estado)
 const pendingCuotaEdit = new Map(); // Ajuste de monto cuota post-confirmacion (userId → estado)
+const pendingSettle = new Map();   // Saldados pendientes de confirmacion
 let txCounter = 0;
 const TX_TTL = 10 * 60 * 1000; // 10 minutos
 
@@ -59,7 +60,7 @@ const mainMenu = new Keyboard()
   .text('📊 Resumen').text('💳 Tarjeta').row()
   .text('📝 Últimas').text('🔄 Cuotas').row()
   .text('💵 Flujo').text('🗑 Borrar').row()
-  .text('❓ Ayuda')
+  .text('🤝 Saldar').text('❓ Ayuda')
   .resized().persistent();
 
 // Mapeo botón del menú → nombre de comando
@@ -72,6 +73,7 @@ const MENU_MAP = {
   '🔄 Cuotas':     'cuotas',
   '💵 Flujo':      'flujo',
   '🗑 Borrar':     'borrar',
+  '🤝 Saldar':     'saldar',
   '❓ Ayuda':      'start',
 };
 
@@ -653,6 +655,74 @@ async function cmdBorrar(ctx) {
 }
 bot.command('borrar', cmdBorrar);
 
+// /saldar — muestra gastos compartidos pendientes para marcar como saldados
+async function cmdSaldar(ctx) {
+  try {
+    const unsettled = await getSharedUnsettled();
+
+    if (unsettled.length === 0) {
+      return ctx.reply('✅ No hay gastos compartidos pendientes de saldar.');
+    }
+
+    cleanMap(pendingSettle);
+    const salId = ++txCounter;
+
+    // Máximo 10 items más recientes
+    const items = unsettled.slice(0, 10);
+
+    pendingSettle.set(salId, {
+      items,
+      userId: ctx.from.id,
+      createdAt: Date.now(),
+    });
+
+    // Agrupar por mes/año para mostrar organizado
+    const groups = {};
+    for (const tx of items) {
+      const parts = tx.fecha.split('/');
+      const key = parts.length === 3 ? `${parts[1]}/${parts[2]}` : 'Otro';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(tx);
+    }
+
+    let text = '🤝 *Saldar gastos compartidos*\n';
+    let idx = 0;
+    for (const [mesAnio, txs] of Object.entries(groups)) {
+      const parts = mesAnio.split('/');
+      const mesNum = parseInt(parts[0]);
+      const mesNombre = MESES_CORTO[mesNum - 1] || mesAnio;
+      const anio = parts[1] || '';
+      text += `\n*${mesNombre} ${anio}:*\n`;
+      for (const tx of txs) {
+        const fechaCorta = tx.fecha.substring(0, 5);
+        // Calcular deuda: quien NO pagó debe su porcentaje
+        let deuda;
+        if (tx.pagadoPor === 'Moises') {
+          deuda = `Oriana debe ${fmtMonto(tx.monto * tx.splitOriana / 100, 'ARS')}`;
+        } else {
+          deuda = `Moises debe ${fmtMonto(tx.monto * tx.splitMoises / 100, 'ARS')}`;
+        }
+        text += `${idx + 1}. ${fechaCorta} — ${tx.descripcion} — ${fmtMonto(tx.monto, 'ARS')} (${deuda})\n`;
+        idx++;
+      }
+    }
+
+    const keyboard = new InlineKeyboard();
+    for (let i = 0; i < items.length; i++) {
+      keyboard.text(`${i + 1}`, `sal_pick:${salId}:${i}`);
+      if ((i + 1) % 5 === 0) keyboard.row();
+    }
+    if (items.length % 5 !== 0) keyboard.row();
+    keyboard.text('❌ Cancelar', `sal_no:${salId}`);
+
+    await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: keyboard });
+  } catch (error) {
+    console.error('Error en /saldar:', error.message);
+    ctx.reply('Error consultando gastos compartidos. Revisá los logs.');
+  }
+}
+bot.command('saldar', cmdSaldar);
+
 // Mapa de handlers para el menú persistente
 const CMD_HANDLERS = {
   start: cmdStart,
@@ -664,6 +734,7 @@ const CMD_HANDLERS = {
   flujo: cmdFlujo,
   registrar_fijos: cmdRegistrarFijos,
   borrar: cmdBorrar,
+  saldar: cmdSaldar,
 };
 
 // /ingreso [monto] [descripcion] — registrar ingreso extra
@@ -1289,6 +1360,88 @@ bot.callbackQuery(/^del_(no|cancel):(\d+)$/, async (ctx) => {
   const delId = parseInt(ctx.match[2]);
   pendingDeletes.delete(delId);
   await ctx.editMessageText('❌ Borrado cancelado.');
+  await ctx.answerCallbackQuery({ text: 'Cancelado' });
+});
+
+// ============================================
+// CALLBACKS — Saldar gastos compartidos
+// ============================================
+
+// Seleccionar gasto a saldar
+bot.callbackQuery(/^sal_pick:(\d+):(\d+)$/, async (ctx) => {
+  const salId = parseInt(ctx.match[1]);
+  const txIdx = parseInt(ctx.match[2]);
+  const pending = pendingSettle.get(salId);
+
+  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'Solo quien pidió saldar puede elegir.' });
+
+  const tx = pending.items[txIdx];
+  if (!tx) return ctx.answerCallbackQuery({ text: 'Transacción no encontrada.' });
+
+  const confirmId = ++txCounter;
+  pendingSettle.set(confirmId, {
+    transaction: tx,
+    originalSalId: salId,
+    userId: ctx.from.id,
+    createdAt: Date.now(),
+  });
+
+  let deuda;
+  if (tx.pagadoPor === 'Moises') {
+    deuda = `Oriana debe ${fmtMonto(tx.monto * tx.splitOriana / 100, 'ARS')} a Moises`;
+  } else {
+    deuda = `Moises debe ${fmtMonto(tx.monto * tx.splitMoises / 100, 'ARS')} a Oriana`;
+  }
+
+  const text =
+    `🤝 *¿Saldar este gasto?*\n\n` +
+    `📅 ${tx.fecha}\n` +
+    `📋 ${tx.descripcion}\n` +
+    `💰 ${fmtMonto(tx.monto, 'ARS')}\n` +
+    `👤 Pagó ${tx.pagadoPor}\n` +
+    `→ ${deuda}`;
+
+  const keyboard = new InlineKeyboard()
+    .text('✅ Saldar', `sal_ok:${confirmId}`)
+    .text('❌ Cancelar', `sal_cancel:${confirmId}`);
+
+  await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: keyboard });
+  await ctx.answerCallbackQuery();
+});
+
+// Confirmar saldado
+bot.callbackQuery(/^sal_ok:(\d+)$/, async (ctx) => {
+  const confirmId = parseInt(ctx.match[1]);
+  const pending = pendingSettle.get(confirmId);
+
+  if (!pending || !pending.transaction) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'Solo quien pidió saldar puede confirmar.' });
+
+  const tx = pending.transaction;
+  pendingSettle.delete(confirmId);
+  if (pending.originalSalId) pendingSettle.delete(pending.originalSalId);
+
+  try {
+    await settleTransaction(tx.row);
+    await ctx.editMessageText(
+      `✅ *Saldado*\n\n` +
+      `📋 ${tx.descripcion} — ${fmtMonto(tx.monto, 'ARS')}`,
+      { parse_mode: 'Markdown' }
+    );
+    await ctx.answerCallbackQuery({ text: 'Gasto saldado' });
+  } catch (error) {
+    console.error('Error saldando transacción:', error.message);
+    await ctx.editMessageText('❌ Error saldando la transacción. Revisá los logs.');
+    await ctx.answerCallbackQuery({ text: 'Error al saldar' });
+  }
+});
+
+// Cancelar saldado (desde seleccion o confirmacion)
+bot.callbackQuery(/^sal_(no|cancel):(\d+)$/, async (ctx) => {
+  const salId = parseInt(ctx.match[2]);
+  pendingSettle.delete(salId);
+  await ctx.editMessageText('❌ Saldado cancelado.');
   await ctx.answerCallbackQuery({ text: 'Cancelado' });
 });
 

@@ -100,8 +100,9 @@ El salario llega en USD a Deel y se distribuye en 3 bolsillos:
 | Resumen semanal | Cron lunes 9:00 AM BA: resumen compartido con totales, top categorías, balance, alertas presupuesto. Ambos usuarios reciben el mismo mensaje | 2026-02-19 |
 | Scheduler separado | `scheduler.js` encapsula todos los cron jobs. Recibe contexto compartido para evitar dependencias circulares con index.js | 2026-02-19 |
 | getPresupuestos() | Lee Presupuesto ARS (3 secciones) + USD (1 sección). Retorna Map con clave `"categoria\|tipo\|moneda"` → monto mensual | 2026-02-19 |
-| Menú persistente | ReplyKeyboard de grammY con 9 botones (Registrar, Balance, Resumen, Tarjeta, Últimas, Cuotas, Flujo, Borrar, Ayuda). `is_persistent: true`, se envía en /start y en "no pude interpretar". Handlers extraídos como funciones nombradas reutilizables. Registro por lenguaje natural se mantiene intacto | 2026-02-22 |
+| Menú persistente | ReplyKeyboard de grammY con 10 botones (Registrar, Balance, Resumen, Tarjeta, Últimas, Cuotas, Flujo, Borrar, Saldar, Ayuda). `is_persistent: true`, se envía en /start y en "no pude interpretar". Handlers extraídos como funciones nombradas reutilizables. Registro por lenguaje natural se mantiene intacto | 2026-02-22 |
 | Categorías Seguros e Impuestos | Nuevas categorías agregadas a la hoja Categorías. Validación de dropdowns actualizada a rango `A2:A50` para soportar futuras categorías | 2026-02-22 |
+| Saldar gastos compartidos | Columna Q "Saldado" en Transacciones. Fórmulas de Balance Compartido excluyen transacciones con Q="Sí". Comando /saldar muestra items compartidos pendientes agrupados por mes, usuario elige cuál marcar como saldado. No afecta Dashboard ni Resumen — solo el Balance | 2026-02-22 |
 
 ---
 
