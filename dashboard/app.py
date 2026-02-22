@@ -166,16 +166,38 @@ def render_resumen(mes, anio):
     total_ars = df_ars['monto'].sum()
     total_usd = df_usd['monto'].sum()
 
+    # Ingresos del mes
+    ing_m = cargar_ingresos_moises()
+    ing_o = cargar_ingresos_oriana()
+    idx = mes - 1
+    ingreso_m_ars = ing_m.iloc[idx]['recibido_ars'] if idx < len(ing_m) else 0
+    salario_usd = ing_m.iloc[idx]['salario_usd'] if idx < len(ing_m) else 0
+    queda_deel = ing_m.iloc[idx]['queda_deel'] if idx < len(ing_m) else 0
+    ingreso_o_ars = ing_o.iloc[idx]['ingreso_ars'] if idx < len(ing_o) else 0
+    total_ingresos_ars = ingreso_m_ars + ingreso_o_ars
+    sobrante_ars = total_ingresos_ars - total_ars
+
+    # Sobrante — lo más importante arriba
+    if total_ingresos_ars > 0:
+        pct = sobrante_ars / total_ingresos_ars * 100
+        color = 'normal' if sobrante_ars >= 0 else 'inverse'
+        st.metric('Sobrante ARS', formato_ars(sobrante_ars),
+                  delta=f'{pct:.0f}% del ingreso', delta_color=color)
+
     # Métricas principales
     c1, c2 = st.columns(2)
-    c1.metric('Total ARS', formato_ars(total_ars))
-    c2.metric('Total USD', formato_usd(total_usd))
+    c1.metric('Ingresos ARS', formato_ars(total_ingresos_ars))
+    c2.metric('Gastado ARS', formato_ars(total_ars))
 
     c3, c4 = st.columns(2)
-    c3.metric('Transacciones', len(df))
+    c3.metric('Gastado USD', formato_usd(total_usd))
+    c4.metric('Queda en Deel', formato_usd(queda_deel))
+
+    c5, c6 = st.columns(2)
+    c5.metric('Transacciones', len(df))
     dias_mes = (datetime.date(anio, mes % 12 + 1, 1) - datetime.timedelta(days=1)).day if mes < 12 else 31
     dia_actual = min(hoy.day, dias_mes) if mes == hoy.month and anio == hoy.year else dias_mes
-    c4.metric('Promedio diario ARS', formato_ars(total_ars / max(dia_actual, 1)))
+    c6.metric('Promedio diario ARS', formato_ars(total_ars / max(dia_actual, 1)))
 
     st.divider()
 
@@ -184,9 +206,9 @@ def render_resumen(mes, anio):
     gasto_oriana = df_ars['monto_oriana'].sum()
     compartido = df_ars[df_ars['tipo'].str.contains('Compartido', case=False, na=False)]['monto'].sum()
 
-    c5, c6 = st.columns(2)
-    c5.metric('Gasto Moises', formato_ars(gasto_moises))
-    c6.metric('Gasto Oriana', formato_ars(gasto_oriana))
+    c7, c8 = st.columns(2)
+    c7.metric('Gasto Moises', formato_ars(gasto_moises))
+    c8.metric('Gasto Oriana', formato_ars(gasto_oriana))
     st.metric('Gasto Compartido', formato_ars(compartido))
 
     # Dona por tipo
