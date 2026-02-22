@@ -103,10 +103,36 @@ from src.graficos import (
     grafico_barras_apiladas, grafico_presupuesto,
 )
 
+# --- Detección de usuario ---
+EMAIL_MAP = {
+    'savellimoises@gmail.com': 'Moises',
+    'orianarivas11@gmail.com': 'Oriana',
+}
+
+def _detectar_usuario():
+    """Detecta el usuario logueado via st.user.email."""
+    try:
+        email = st.user.email if hasattr(st, 'user') and st.user else None
+        if email and email in EMAIL_MAP:
+            return EMAIL_MAP[email]
+    except Exception:
+        pass
+    return None
+
+usuario_detectado = _detectar_usuario()
+
 # --- Sidebar ---
 
 with st.sidebar:
     st.title('\U0001f4b0 Finanzas M&O')
+    st.divider()
+
+    opciones_usuario = ['Moises', 'Oriana', 'Todos']
+    default_idx = opciones_usuario.index(usuario_detectado) if usuario_detectado else 2
+    usuario = st.segmented_control('Ver como', opciones_usuario, default=opciones_usuario[default_idx])
+    if usuario is None:
+        usuario = opciones_usuario[default_idx]
+
     st.divider()
 
     hoy = datetime.date.today()
@@ -163,8 +189,6 @@ def render_resumen(mes, anio):
 
     df_ars = df[df['moneda'] == 'ARS']
     df_usd = df[df['moneda'] == 'USD']
-    total_ars = df_ars['monto'].sum()
-    total_usd = df_usd['monto'].sum()
 
     # Ingresos del mes
     ing_m = cargar_ingresos_moises()
@@ -174,58 +198,87 @@ def render_resumen(mes, anio):
     salario_usd = ing_m.iloc[idx]['salario_usd'] if idx < len(ing_m) else 0
     queda_deel = ing_m.iloc[idx]['queda_deel'] if idx < len(ing_m) else 0
     ingreso_o_ars = ing_o.iloc[idx]['ingreso_ars'] if idx < len(ing_o) else 0
-    total_ingresos_ars = ingreso_m_ars + ingreso_o_ars
-    sobrante_ars = total_ingresos_ars - total_ars
+
+    # Filtrar según usuario seleccionado
+    if usuario == 'Moises':
+        # Gastos: individuales Moises + su parte de compartidos
+        total_ars = df_ars['monto_moises'].sum()
+        total_usd = df_usd['monto'].sum()  # USD es solo Moises
+        total_ingresos = ingreso_m_ars
+        label_ingreso = 'Ingreso Moises'
+        label_gasto = 'Gastado Moises'
+    elif usuario == 'Oriana':
+        total_ars = df_ars['monto_oriana'].sum()
+        total_usd = 0
+        total_ingresos = ingreso_o_ars
+        label_ingreso = 'Ingreso Oriana'
+        label_gasto = 'Gastado Oriana'
+    else:
+        total_ars = df_ars['monto'].sum()
+        total_usd = df_usd['monto'].sum()
+        total_ingresos = ingreso_m_ars + ingreso_o_ars
+        label_ingreso = 'Ingresos ARS'
+        label_gasto = 'Gastado ARS'
+
+    sobrante = total_ingresos - total_ars
 
     # Sobrante — lo más importante arriba
-    if total_ingresos_ars > 0:
-        pct = sobrante_ars / total_ingresos_ars * 100
-        color = 'normal' if sobrante_ars >= 0 else 'inverse'
-        st.metric('Sobrante ARS', formato_ars(sobrante_ars),
+    if total_ingresos > 0:
+        pct = sobrante / total_ingresos * 100
+        color = 'normal' if sobrante >= 0 else 'inverse'
+        st.metric('Sobrante ARS', formato_ars(sobrante),
                   delta=f'{pct:.0f}% del ingreso', delta_color=color)
 
     # Métricas principales
     c1, c2 = st.columns(2)
-    c1.metric('Ingresos ARS', formato_ars(total_ingresos_ars))
-    c2.metric('Gastado ARS', formato_ars(total_ars))
+    c1.metric(label_ingreso, formato_ars(total_ingresos))
+    c2.metric(label_gasto, formato_ars(total_ars))
 
     c3, c4 = st.columns(2)
-    c3.metric('Gastado USD', formato_usd(total_usd))
-    c4.metric('Queda en Deel', formato_usd(queda_deel))
+    if usuario != 'Oriana':
+        c3.metric('Gastado USD', formato_usd(total_usd))
+        c4.metric('Queda en Deel', formato_usd(queda_deel))
+    else:
+        c3.metric('Transacciones', len(df[df['pagado_por'].str.contains('Oriana', case=False, na=False) |
+                                          df['tipo'].str.contains('Compartido', case=False, na=False)]))
 
-    c5, c6 = st.columns(2)
-    c5.metric('Transacciones', len(df))
     dias_mes = (datetime.date(anio, mes % 12 + 1, 1) - datetime.timedelta(days=1)).day if mes < 12 else 31
     dia_actual = min(hoy.day, dias_mes) if mes == hoy.month and anio == hoy.year else dias_mes
-    c6.metric('Promedio diario ARS', formato_ars(total_ars / max(dia_actual, 1)))
+
+    if usuario == 'Todos':
+        c5, c6 = st.columns(2)
+        c5.metric('Transacciones', len(df))
+        c6.metric('Promedio diario ARS', formato_ars(total_ars / max(dia_actual, 1)))
+    elif usuario == 'Moises':
+        c5, c6 = st.columns(2)
+        c5.metric('Transacciones', len(df))
+        c6.metric('Promedio diario ARS', formato_ars(total_ars / max(dia_actual, 1)))
 
     st.divider()
 
-    # Por persona (solo ARS)
-    gasto_moises = df_ars['monto_moises'].sum()
-    gasto_oriana = df_ars['monto_oriana'].sum()
-    compartido = df_ars[df_ars['tipo'].str.contains('Compartido', case=False, na=False)]['monto'].sum()
+    if usuario == 'Todos':
+        # Por persona (solo ARS)
+        gasto_moises = df_ars['monto_moises'].sum()
+        gasto_oriana = df_ars['monto_oriana'].sum()
+        compartido = df_ars[df_ars['tipo'].str.contains('Compartido', case=False, na=False)]['monto'].sum()
 
-    c7, c8 = st.columns(2)
-    c7.metric('Gasto Moises', formato_ars(gasto_moises))
-    c8.metric('Gasto Oriana', formato_ars(gasto_oriana))
-    st.metric('Gasto Compartido', formato_ars(compartido))
+        c7, c8 = st.columns(2)
+        c7.metric('Gasto Moises', formato_ars(gasto_moises))
+        c8.metric('Gasto Oriana', formato_ars(gasto_oriana))
+        st.metric('Gasto Compartido', formato_ars(compartido))
 
-    # Dona por tipo
-    tipos = {'Individual Moises': 0, 'Individual Oriana': 0, 'Compartido': 0}
-    for _, row in df_ars.iterrows():
-        t = row['tipo']
-        if 'moises' in t.lower():
-            tipos['Individual Moises'] += row['monto']
-        elif 'oriana' in t.lower():
-            tipos['Individual Oriana'] += row['monto']
-        else:
-            tipos['Compartido'] += row['monto']
+    # Dona por categoría (top 8) — filtrada por usuario
+    if usuario == 'Moises':
+        cat_data = df_ars.groupby('categoria')['monto_moises'].sum().sort_values(ascending=False)
+    elif usuario == 'Oriana':
+        cat_data = df_ars.groupby('categoria')['monto_oriana'].sum().sort_values(ascending=False)
+    else:
+        cat_data = df_ars.groupby('categoria')['monto'].sum().sort_values(ascending=False)
 
-    labels = [k for k, v in tipos.items() if v > 0]
-    values = [v for v in tipos.values() if v > 0]
-    if labels:
-        st.plotly_chart(grafico_dona(labels, values, 'Distribución por tipo', dark=dark),
+    cat_data = cat_data[cat_data > 0].head(8)
+    if not cat_data.empty:
+        st.plotly_chart(grafico_dona(cat_data.index.tolist(), cat_data.values.tolist(),
+                                     'Top categorías', dark=dark),
                         use_container_width=True)
 
 
