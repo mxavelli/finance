@@ -1806,11 +1806,11 @@ async function setupFrecuencia() {
     // [Descripción, Categoría, Monto, Moneda, Método, Tipo, Día, (H=fórmula skip), Frecuencia, Meses]
     ['Discord Nitro', 'Entretenimiento', 5.15, 'USD', 'Deel USD', 'Individual Moises', '16', '', 'Mensual', ''],
     ['Discord Server Boost', 'Entretenimiento', 3.49, 'USD', 'Deel USD', 'Individual Moises', '31', '', 'Mensual', ''],
-    ['Microsoft 365', 'Servicios', 3699, 'ARS', 'Deel Card', 'Individual Moises', '26', '', 'Mensual', ''],
+    ['Microsoft 365', 'Suscripciones', 3699, 'ARS', 'Deel Card', 'Individual Moises', '26', '', 'Mensual', ''],
     ['Xbox Game Pass', 'Entretenimiento', 24999, 'ARS', 'Deel Card', 'Individual Moises', '22', '', 'Mensual', ''],
     ['GearUp Portal', 'Entretenimiento', 10, 'USD', 'Deel USD', 'Individual Moises', '', '', 'Trimestral', '2,5,8,11'],
-    ['1Password', 'Servicios', 60, 'USD', 'Deel USD', 'Individual Moises', '', '', 'Anual', '6'],
-    ['Krisp', 'Servicios', 192, 'USD', 'Deel USD', 'Individual Moises', '', '', 'Anual', '7'],
+    ['1Password', 'Suscripciones', 60, 'USD', 'Deel USD', 'Individual Moises', '', '', 'Anual', '6'],
+    ['Krisp', 'Suscripciones', 192, 'USD', 'Deel USD', 'Individual Moises', '', '', 'Anual', '7'],
   ];
 
   // Escribir A-G (datos) para filas 35-41
