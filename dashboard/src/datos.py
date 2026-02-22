@@ -380,6 +380,61 @@ def cargar_crypto_transacciones():
                  'precio_usd', 'total_usd', 'plataforma', 'notas'])
 
 
+# --- Inversiones ---
+
+@st.cache_data(ttl=300)
+def cargar_inversiones():
+    """Lee portafolio de inversiones y retorna dict { tipos: DataFrame, total: float }."""
+    sheet = get_sheet()
+    ws = sheet.worksheet('Inversiones')
+    data = ws.get('A4:D10', value_render_option='UNFORMATTED_VALUE')
+    if not data:
+        return {'tipos': pd.DataFrame(columns=['tipo', 'porcentaje', 'valor_ars', 'plataforma']), 'total': 0.0}
+    tipos = []
+    total = 0.0
+    for i, r in enumerate(data):
+        while len(r) < 4:
+            r.append(None)
+        if i == len(data) - 1 and str(r[0] or '').upper() == 'TOTAL':
+            total = _safe_float(r[2])
+            continue
+        if not r[0]:
+            continue
+        tipos.append({
+            'tipo': r[0] or '',
+            'porcentaje': _safe_float(r[1]),
+            'valor_ars': _safe_float(r[2]),
+            'plataforma': r[3] or '',
+        })
+    df = pd.DataFrame(tipos) if tipos else pd.DataFrame(columns=['tipo', 'porcentaje', 'valor_ars', 'plataforma'])
+    return {'tipos': df, 'total': total}
+
+
+@st.cache_data(ttl=300)
+def cargar_inversiones_historial():
+    """Lee historial de valor de inversiones."""
+    sheet = get_sheet()
+    ws = sheet.worksheet('Inversiones')
+    data = ws.get('A14:D', value_render_option='UNFORMATTED_VALUE')
+    if not data:
+        return pd.DataFrame(columns=['fecha', 'valor_total', 'variacion', 'notas'])
+    rows = []
+    for r in data:
+        while len(r) < 4:
+            r.append(None)
+        fecha = _parse_fecha_serial(r[0])
+        if fecha is None:
+            continue
+        rows.append({
+            'fecha': fecha,
+            'valor_total': _safe_float(r[1]),
+            'variacion': _safe_float(r[2]),
+            'notas': r[3] or '',
+        })
+    return pd.DataFrame(rows) if rows else pd.DataFrame(
+        columns=['fecha', 'valor_total', 'variacion', 'notas'])
+
+
 # --- Helpers internos ---
 
 def _safe_float(val):

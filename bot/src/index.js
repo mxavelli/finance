@@ -10,6 +10,7 @@ const {
   getCuotas, appendCuota, updateCuotaRegistradas, updateCuotaMonto,
   getPresupuestos, getSharedUnsettled, settleTransaction,
   getCryptoHoldings, getCryptoTransactions, appendCryptoTransaction, addCryptoHolding,
+  getInversiones, getInversionesHistorial, updateInversiones, appendInversionesHistorial,
 } = require('./sheets');
 const { getCategories } = require('./categories');
 const { parseTransaction, formatAmount } = require('./parser');
@@ -34,6 +35,7 @@ const pendingFixedEdit = new Map(); // Edicion de monto de gasto fijo (userId �
 const pendingCuotaEdit = new Map(); // Ajuste de monto cuota post-confirmacion (userId → estado)
 const pendingSettle = new Map();   // Saldados pendientes de confirmacion
 const pendingCrypto = new Map();   // Operaciones crypto pendientes
+const pendingInversiones = new Map(); // Actualización de inversiones pendiente
 let txCounter = 0;
 const TX_TTL = 10 * 60 * 1000; // 10 minutos
 
@@ -63,7 +65,7 @@ const mainMenu = new Keyboard()
   .text('📝 Últimas').text('🔄 Cuotas').row()
   .text('💵 Flujo').text('🗑 Borrar').row()
   .text('🤝 Saldar').text('💎 Crypto').row()
-  .text('❓ Ayuda')
+  .text('📈 Inversiones').text('❓ Ayuda').row()
   .resized().persistent();
 
 // Mapeo botón del menú → nombre de comando
@@ -78,6 +80,7 @@ const MENU_MAP = {
   '🗑 Borrar':     'borrar',
   '🤝 Saldar':     'saldar',
   '💎 Crypto':     'crypto',
+  '📈 Inversiones': 'inversiones',
   '❓ Ayuda':      'start',
 };
 
@@ -890,6 +893,136 @@ bot.callbackQuery(/^crypto_no:(\d+)$/, async (ctx) => {
 });
 
 
+// ============================================
+// /inversiones — Portafolio de inversiones (PPI)
+// ============================================
+
+async function cmdInversiones(ctx) {
+  try {
+    cleanMap(pendingInversiones);
+    const { tipos, total } = await getInversiones();
+
+    if (tipos.length === 0 && total === 0) {
+      return ctx.reply(
+        '📈 *Portafolio de Inversiones*\n\nNo hay inversiones registradas.',
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    let text = '📈 *Portafolio de Inversiones*\n\n';
+    text += `💼 *Total: ${fmtMonto(total, 'ARS')}*\n`;
+    text += '📍 PPI (Portfolio Personal)\n\n';
+
+    if (tipos.length > 0) {
+      text += '*Composición:*\n';
+      for (const t of tipos) {
+        const pct = (t.porcentaje * 100).toFixed(2).replace('.', ',');
+        text += `📊 ${t.tipo} — ${pct}% (${fmtMonto(t.valorArs, 'ARS')})\n`;
+      }
+      text += '\n';
+    }
+
+    // Última actualización del historial
+    const hist = await getInversionesHistorial(1);
+    if (hist.length > 0) {
+      text += `📅 Última act: ${hist[0].fecha}`;
+    }
+
+    const keyboard = new InlineKeyboard()
+      .text('📝 Actualizar', 'inv_update')
+      .text('📜 Historial', 'inv_hist');
+
+    await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: keyboard });
+  } catch (error) {
+    console.error('Error en /inversiones:', error.message);
+    ctx.reply('Error consultando inversiones. Revisá los logs.');
+  }
+}
+bot.command('inversiones', cmdInversiones);
+
+// Callback: iniciar actualización de inversiones
+bot.callbackQuery('inv_update', async (ctx) => {
+  pendingInversiones.set(ctx.from.id, { action: 'update_waiting', createdAt: Date.now() });
+  await ctx.editMessageText(
+    '📝 *Actualizar Inversiones*\n\n' +
+    'Escribí el valor total actual.\n' +
+    'Opcionalmente incluí los porcentajes.\n\n' +
+    'Ejemplos:\n' +
+    '`650000`\n' +
+    '`650000 15 28 57`',
+    { parse_mode: 'Markdown' }
+  );
+  await ctx.answerCallbackQuery();
+});
+
+// Callback: historial de inversiones
+bot.callbackQuery('inv_hist', async (ctx) => {
+  try {
+    const entries = await getInversionesHistorial(10);
+    if (entries.length === 0) {
+      await ctx.answerCallbackQuery({ text: 'Sin historial' });
+      return;
+    }
+    let text = '📜 *Historial de inversiones*\n\n';
+    for (const e of entries) {
+      const variacion = e.variacion > 0 ? `+${fmtMonto(e.variacion, 'ARS')}` :
+                         e.variacion < 0 ? fmtMonto(e.variacion, 'ARS') : '';
+      const varText = variacion ? ` (${variacion})` : '';
+      text += `📅 ${e.fecha} — ${fmtMonto(e.valorTotal, 'ARS')}${varText}\n`;
+      if (e.notas) text += `   _${e.notas}_\n`;
+    }
+    await ctx.editMessageText(text, { parse_mode: 'Markdown' });
+    await ctx.answerCallbackQuery();
+  } catch (error) {
+    console.error('Error historial inversiones:', error.message);
+    await ctx.answerCallbackQuery({ text: 'Error' });
+  }
+});
+
+// Callback: confirmar actualización de inversiones
+bot.callbackQuery(/^inv_ok:(\d+)$/, async (ctx) => {
+  const invId = parseInt(ctx.match[1]);
+  const pending = pendingInversiones.get(invId);
+  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'No autorizado.' });
+
+  pendingInversiones.delete(invId);
+
+  try {
+    const { month, year, day } = getNowBA();
+    const fechaStr = `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
+
+    await updateInversiones(pending.total, pending.porcentajes);
+    await appendInversionesHistorial(fechaStr, pending.total, pending.notas || '');
+
+    let text = `✅ *Inversiones actualizadas*\n\n💼 Total: ${fmtMonto(pending.total, 'ARS')}`;
+    if (pending.porcentajes) {
+      text += '\n\n*Porcentajes actualizados:*';
+      const nombres = ['Acciones', 'CEDEARs', 'FCIs'];
+      for (let i = 0; i < pending.porcentajes.length; i++) {
+        const nombre = nombres[i] || `Tipo ${i + 1}`;
+        text += `\n📊 ${nombre} — ${pending.porcentajes[i]}%`;
+      }
+    }
+
+    await ctx.editMessageText(text, { parse_mode: 'Markdown' });
+    await ctx.answerCallbackQuery({ text: 'Actualizado' });
+  } catch (error) {
+    console.error('Error actualizando inversiones:', error.message);
+    await ctx.editMessageText('Error actualizando. Revisá los logs.');
+    await ctx.answerCallbackQuery({ text: 'Error' });
+  }
+});
+
+// Callback: cancelar actualización de inversiones
+bot.callbackQuery(/^inv_no:(\d+)$/, async (ctx) => {
+  const invId = parseInt(ctx.match[1]);
+  pendingInversiones.delete(invId);
+  await ctx.editMessageText('Actualización cancelada.');
+  await ctx.answerCallbackQuery({ text: 'Cancelado' });
+});
+
+
 // Mapa de handlers para el menú persistente
 const CMD_HANDLERS = {
   start: cmdStart,
@@ -903,6 +1036,7 @@ const CMD_HANDLERS = {
   borrar: cmdBorrar,
   saldar: cmdSaldar,
   crypto: cmdCrypto,
+  inversiones: cmdInversiones,
 };
 
 // /ingreso [monto] [descripcion] — registrar ingreso extra
@@ -1160,6 +1294,68 @@ bot.on('message:text', async (ctx) => {
         `Plataforma: ${plataforma}`,
         { parse_mode: 'Markdown', reply_markup: keyboard }
       );
+    }
+
+    // Interceptar si el usuario está actualizando inversiones
+    const invPending = pendingInversiones.get(ctx.from.id);
+    if (invPending && invPending.action === 'update_waiting') {
+      const parts = text.split(/\s+/);
+
+      // Parsear monto total (primer número, soporta locale argentino)
+      let totalStr = parts[0];
+      let total;
+      if (/^\d{1,3}(\.\d{3})+$/.test(totalStr)) {
+        total = parseFloat(totalStr.replace(/\./g, ''));
+      } else if (/^\d+,\d+$/.test(totalStr)) {
+        total = parseFloat(totalStr.replace(',', '.'));
+      } else {
+        total = parseFloat(totalStr);
+      }
+
+      if (isNaN(total) || total <= 0) {
+        return ctx.reply('Monto inválido. Escribí el valor total.\nEjemplo: `650000` o `650000 15 28 57`', { parse_mode: 'Markdown' });
+      }
+
+      // Parsear porcentajes opcionales
+      let porcentajes = null;
+      if (parts.length >= 4) {
+        const pcts = parts.slice(1, 4).map(p => parseFloat(p.replace(',', '.')));
+        if (pcts.some(p => isNaN(p) || p < 0)) {
+          return ctx.reply('Porcentajes inválidos. Deben ser números positivos.\nEjemplo: `650000 15 28 57`', { parse_mode: 'Markdown' });
+        }
+        const suma = pcts.reduce((a, b) => a + b, 0);
+        if (Math.abs(suma - 100) > 2) {
+          return ctx.reply(`Los porcentajes suman ${suma.toFixed(1)}%. Deben sumar ~100%.`);
+        }
+        porcentajes = pcts;
+      }
+
+      pendingInversiones.delete(ctx.from.id);
+
+      const invId = ++txCounter;
+      pendingInversiones.set(invId, {
+        total, porcentajes,
+        userId: ctx.from.id,
+        createdAt: Date.now(),
+      });
+
+      let confirmText = `📈 *Actualizar Inversiones*\n\n💼 Total: ${fmtMonto(total, 'ARS')}`;
+      if (porcentajes) {
+        const nombres = ['Acciones', 'CEDEARs', 'FCIs'];
+        confirmText += '\n\n*Nuevos porcentajes:*';
+        for (let i = 0; i < porcentajes.length; i++) {
+          confirmText += `\n📊 ${nombres[i] || `Tipo ${i + 1}`} — ${porcentajes[i]}%`;
+        }
+      } else {
+        confirmText += '\n_(porcentajes sin cambios)_';
+      }
+      confirmText += '\n\n¿Confirmar?';
+
+      const keyboard = new InlineKeyboard()
+        .text('✅ Confirmar', `inv_ok:${invId}`)
+        .text('❌ Cancelar', `inv_no:${invId}`);
+
+      return ctx.reply(confirmText, { parse_mode: 'Markdown', reply_markup: keyboard });
     }
 
     // Interceptar si el usuario está ajustando monto de cuota (con interés)

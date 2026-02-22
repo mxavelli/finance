@@ -95,6 +95,7 @@ from src.datos import (
     cargar_balance, cargar_presupuesto_ars, cargar_presupuesto_usd,
     cargar_ingresos_moises, cargar_ingresos_oriana,
     cargar_crypto_holdings, cargar_crypto_transacciones,
+    cargar_inversiones, cargar_inversiones_historial,
 )
 from src.formato import formato_ars, formato_usd, formato_moneda, nombre_mes, nombre_mes_corto
 from src.graficos import (
@@ -125,6 +126,7 @@ with st.sidebar:
         'Flujo de caja',
         'Ahorro',
         'Crypto',
+        'Inversiones',
         'Gastos fijos',
         'Comparativo M vs O',
     ])
@@ -670,6 +672,21 @@ def render_ahorro(mes, anio):
     except Exception:
         pass
 
+    # Subsección inversiones en ahorro
+    try:
+        inv = cargar_inversiones()
+        if inv['total'] > 0:
+            st.divider()
+            st.subheader('Inversiones (PPI)')
+            st.metric('Total en PPI', formato_ars(inv['total']))
+            df_tipos = inv['tipos']
+            if not df_tipos.empty:
+                for _, t in df_tipos[df_tipos['porcentaje'] > 0].iterrows():
+                    pct = f"{t['porcentaje'] * 100:.2f}%"
+                    st.markdown(f"- **{t['tipo']}**: {pct} ({formato_ars(t['valor_ars'])})")
+    except Exception:
+        pass
+
 
 # --- 10. Crypto ---
 
@@ -729,7 +746,80 @@ def render_crypto(mes, anio):
         st.warning('No se pudo cargar el historial.')
 
 
-# --- 11. Gastos fijos ---
+# --- 11. Inversiones ---
+
+def render_inversiones(mes, anio):
+    st.header('Portafolio de Inversiones')
+
+    try:
+        inv = cargar_inversiones()
+    except Exception:
+        st.warning('No se pudo cargar la hoja Inversiones.')
+        return
+
+    df_tipos = inv['tipos']
+    total = inv['total']
+
+    if total == 0 and df_tipos.empty:
+        st.info('No hay inversiones registradas.')
+        return
+
+    # Métrica principal
+    st.metric('Total en PPI', formato_ars(total))
+
+    st.divider()
+
+    # Composición
+    if not df_tipos.empty:
+        df_active = df_tipos[df_tipos['porcentaje'] > 0]
+        if not df_active.empty:
+            st.subheader('Composición')
+            cols = st.columns(len(df_active))
+            for i, (_, row) in enumerate(df_active.iterrows()):
+                pct_str = f"{row['porcentaje'] * 100:.2f}%"
+                cols[i].metric(row['tipo'], formato_ars(row['valor_ars']), pct_str)
+
+            # Dona de composición
+            if len(df_active) > 1:
+                st.plotly_chart(grafico_dona(
+                    df_active['tipo'].tolist(),
+                    df_active['valor_ars'].tolist(),
+                    'Distribución', dark=dark,
+                ), use_container_width=True)
+
+    # Historial de valor
+    st.divider()
+    st.subheader('Historial de valor')
+    try:
+        df_hist = cargar_inversiones_historial()
+        if df_hist.empty:
+            st.info('Sin historial registrado.')
+        else:
+            # Línea temporal
+            if len(df_hist) > 1:
+                df_sorted = df_hist.sort_values('fecha')
+                fechas = [f.strftime('%d/%m/%Y') if hasattr(f, 'strftime') else str(f) for f in df_sorted['fecha']]
+                st.plotly_chart(grafico_lineas(
+                    fechas, {'Valor Total': df_sorted['valor_total'].tolist()},
+                    'Evolución del portafolio', dark=dark,
+                ), use_container_width=True)
+
+            # Tabla de historial
+            for _, entry in df_hist.iterrows():
+                fecha_str = entry['fecha'].strftime('%d/%m/%Y') if hasattr(entry['fecha'], 'strftime') else str(entry['fecha'])
+                variacion = entry['variacion']
+                var_text = ''
+                if variacion > 0:
+                    var_text = f' (+{formato_ars(variacion)})'
+                elif variacion < 0:
+                    var_text = f' ({formato_ars(variacion)})'
+                notas = f' — _{entry["notas"]}_' if entry['notas'] else ''
+                st.markdown(f"📅 {fecha_str} — {formato_ars(entry['valor_total'])}{var_text}{notas}")
+    except Exception:
+        st.warning('No se pudo cargar el historial.')
+
+
+# --- 12. Gastos fijos ---
 
 def render_fijos(mes, anio):
     st.header(f'Gastos fijos — {nombre_mes(mes)}')
@@ -848,6 +938,8 @@ elif seccion == 'Ahorro':
     render_ahorro(mes, anio)
 elif seccion == 'Crypto':
     render_crypto(mes, anio)
+elif seccion == 'Inversiones':
+    render_inversiones(mes, anio)
 elif seccion == 'Gastos fijos':
     render_fijos(mes, anio)
 elif seccion == 'Comparativo M vs O':

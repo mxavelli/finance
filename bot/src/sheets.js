@@ -2602,6 +2602,373 @@ async function addCryptoHolding(simbolo, plataforma) {
 }
 
 
+// Crea hoja "Inversiones" con portafolio + historial de valor.
+// Ejecutar una sola vez: node -e "require('./src/sheets').setupInversiones()"
+async function setupInversiones() {
+  const spreadsheetId = config.sheetId;
+  function loc(f) { return f.replace(/,/g, ';'); }
+
+  // 1. Crear hoja
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{
+        addSheet: {
+          properties: {
+            title: 'Inversiones',
+            tabColorStyle: { rgbColor: { red: 0.20, green: 0.55, blue: 0.85 } },
+          },
+        },
+      }],
+    },
+  });
+
+  // 2. Obtener sheetId
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const invSheetId = meta.data.sheets.find(s => s.properties.title === 'Inversiones').properties.sheetId;
+
+  // 3. Escribir títulos, headers y fórmulas
+  const data = [];
+
+  // Título portafolio
+  data.push({ range: 'Inversiones!A1', values: [['Portafolio de Inversiones']] });
+
+  // Headers portafolio (fila 3)
+  data.push({
+    range: 'Inversiones!A3:D3',
+    values: [['Tipo', 'Porcentaje', 'Valor ARS', 'Plataforma']],
+  });
+
+  // Datos iniciales (filas 4-6)
+  data.push({
+    range: 'Inversiones!A4:B6',
+    values: [
+      ['Acciones', 0.148],
+      ['CEDEARs', 0.2725],
+      ['FCIs', 0.5794],
+    ],
+  });
+  // Plataforma
+  data.push({
+    range: 'Inversiones!D4:D6',
+    values: [['PPI'], ['PPI'], ['PPI']],
+  });
+
+  // Fórmulas Valor ARS (C4:C9)
+  const valorFormulas = [];
+  for (let r = 4; r <= 9; r++) {
+    valorFormulas.push([loc(`=IF(B${r}="";"";B${r}*$C$10)`)]);
+  }
+  data.push({ range: 'Inversiones!C4:C9', values: valorFormulas });
+
+  // TOTAL (fila 10)
+  data.push({
+    range: 'Inversiones!A10:C10',
+    values: [['TOTAL', loc('=SUM(B4:B9)'), 600000]],
+  });
+
+  // Título historial (fila 12)
+  data.push({ range: 'Inversiones!A12', values: [['Historial de Valor']] });
+
+  // Headers historial (fila 13)
+  data.push({
+    range: 'Inversiones!A13:D13',
+    values: [['Fecha', 'Valor Total ARS', 'Variación ARS', 'Notas']],
+  });
+
+  // ARRAYFORMULA para Variación en C14
+  data.push({
+    range: 'Inversiones!C14',
+    values: [[loc('=ARRAYFORMULA(IF(B14:B="";"";B14:B-IF(ROW(B14:B)=ROW(B14);0;INDIRECT("B"&ROW(B14:B)-1))))')]]
+  });
+
+  // Dato inicial en historial (fila 14)
+  data.push({
+    range: 'Inversiones!A14:B14',
+    values: [['22/02/2026', 600000]],
+  });
+  data.push({
+    range: 'Inversiones!D14',
+    values: [['Valor inicial']],
+  });
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: { valueInputOption: 'USER_ENTERED', data },
+  });
+
+  // 4. Estilos y formato
+  const requests = [];
+
+  // Merge título portafolio A1:D1
+  requests.push({
+    mergeCells: {
+      range: { sheetId: invSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 4 },
+      mergeType: 'MERGE_ALL',
+    },
+  });
+
+  // Estilo título portafolio
+  requests.push({
+    repeatCell: {
+      range: { sheetId: invSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 4 },
+      cell: {
+        userEnteredFormat: {
+          backgroundColor: { red: 0.10, green: 0.25, blue: 0.45 },
+          textFormat: { bold: true, fontSize: 14, foregroundColor: { red: 1, green: 1, blue: 1 } },
+          horizontalAlignment: 'CENTER',
+        },
+      },
+      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+    },
+  });
+
+  // Headers portafolio (fila 3) — azul financiero con texto blanco
+  requests.push({
+    repeatCell: {
+      range: { sheetId: invSheetId, startRowIndex: 2, endRowIndex: 3, startColumnIndex: 0, endColumnIndex: 4 },
+      cell: {
+        userEnteredFormat: {
+          backgroundColor: { red: 0.20, green: 0.55, blue: 0.85 },
+          textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } },
+          horizontalAlignment: 'CENTER',
+        },
+      },
+      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+    },
+  });
+
+  // TOTAL fila 10 — negrita con fondo gris
+  requests.push({
+    repeatCell: {
+      range: { sheetId: invSheetId, startRowIndex: 9, endRowIndex: 10, startColumnIndex: 0, endColumnIndex: 4 },
+      cell: {
+        userEnteredFormat: {
+          backgroundColor: { red: 0.90, green: 0.90, blue: 0.90 },
+          textFormat: { bold: true },
+          horizontalAlignment: 'CENTER',
+        },
+      },
+      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+    },
+  });
+
+  // Merge título historial A12:D12
+  requests.push({
+    mergeCells: {
+      range: { sheetId: invSheetId, startRowIndex: 11, endRowIndex: 12, startColumnIndex: 0, endColumnIndex: 4 },
+      mergeType: 'MERGE_ALL',
+    },
+  });
+
+  // Estilo título historial
+  requests.push({
+    repeatCell: {
+      range: { sheetId: invSheetId, startRowIndex: 11, endRowIndex: 12, startColumnIndex: 0, endColumnIndex: 4 },
+      cell: {
+        userEnteredFormat: {
+          backgroundColor: { red: 0.10, green: 0.25, blue: 0.45 },
+          textFormat: { bold: true, fontSize: 12, foregroundColor: { red: 1, green: 1, blue: 1 } },
+          horizontalAlignment: 'CENTER',
+        },
+      },
+      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+    },
+  });
+
+  // Headers historial (fila 13) — azul financiero
+  requests.push({
+    repeatCell: {
+      range: { sheetId: invSheetId, startRowIndex: 12, endRowIndex: 13, startColumnIndex: 0, endColumnIndex: 4 },
+      cell: {
+        userEnteredFormat: {
+          backgroundColor: { red: 0.20, green: 0.55, blue: 0.85 },
+          textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } },
+          horizontalAlignment: 'CENTER',
+        },
+      },
+      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+    },
+  });
+
+  // Freeze fila 3
+  requests.push({
+    updateSheetProperties: {
+      properties: { sheetId: invSheetId, gridProperties: { frozenRowCount: 3 } },
+      fields: 'gridProperties.frozenRowCount',
+    },
+  });
+
+  // Anchos de columna
+  const colWidths = [130, 110, 150, 120];
+  for (let i = 0; i < colWidths.length; i++) {
+    requests.push({
+      updateDimensionProperties: {
+        range: { sheetId: invSheetId, dimension: 'COLUMNS', startIndex: i, endIndex: i + 1 },
+        properties: { pixelSize: colWidths[i] },
+        fields: 'pixelSize',
+      },
+    });
+  }
+
+  // Formato porcentaje (col B holdings filas 4-10)
+  requests.push({
+    repeatCell: {
+      range: { sheetId: invSheetId, startRowIndex: 3, endRowIndex: 10, startColumnIndex: 1, endColumnIndex: 2 },
+      cell: { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '0.00%' } } },
+      fields: 'userEnteredFormat.numberFormat',
+    },
+  });
+
+  // Formato moneda ARS (col C filas 4-10 + col B-C historial filas 14+)
+  for (const [startCol, endCol, startRow, endRow] of [[2, 3, 3, 10], [1, 3, 13, 5000]]) {
+    requests.push({
+      repeatCell: {
+        range: { sheetId: invSheetId, startRowIndex: startRow, endRowIndex: endRow, startColumnIndex: startCol, endColumnIndex: endCol },
+        cell: { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '$#,##0.00' } } },
+        fields: 'userEnteredFormat.numberFormat',
+      },
+    });
+  }
+
+  // Filas alternadas portafolio (4, 6, 8)
+  for (let r = 3; r < 9; r += 2) {
+    requests.push({
+      repeatCell: {
+        range: { sheetId: invSheetId, startRowIndex: r, endRowIndex: r + 1, startColumnIndex: 0, endColumnIndex: 4 },
+        cell: { userEnteredFormat: { backgroundColor: { red: 0.90, green: 0.95, blue: 1.0 } } },
+        fields: 'userEnteredFormat.backgroundColor',
+      },
+    });
+  }
+
+  await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+
+  console.log('Hoja Inversiones creada con portafolio, historial, fórmulas y estilos.');
+}
+
+
+// Lee portafolio de inversiones.
+async function getInversiones() {
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: config.sheetId,
+    range: 'Inversiones!A4:D10',
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  });
+  const rows = response.data.values || [];
+  const tipos = [];
+  let total = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    while (r.length < 4) r.push('');
+    if (i === rows.length - 1 && (r[0] || '').toString().toUpperCase() === 'TOTAL') {
+      total = parseFloat(r[2]) || 0;
+      continue;
+    }
+    if (!r[0]) continue;
+    tipos.push({
+      tipo: r[0] || '',
+      porcentaje: parseFloat(r[1]) || 0,
+      valorArs: parseFloat(r[2]) || 0,
+      plataforma: r[3] || '',
+    });
+  }
+  return { tipos, total };
+}
+
+
+// Lee las últimas N entradas del historial de inversiones.
+async function getInversionesHistorial(n = 10) {
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: config.sheetId,
+    range: 'Inversiones!A14:D',
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  });
+  const rows = response.data.values || [];
+  const entries = rows
+    .map((r, i) => {
+      while (r.length < 4) r.push('');
+      let fecha = r[0] || '';
+      if (typeof fecha === 'number' && fecha > 40000) {
+        const d = new Date(Date.UTC(1899, 11, 30 + fecha));
+        fecha = `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`;
+      }
+      return {
+        row: i + 14,
+        fecha,
+        valorTotal: parseFloat(r[1]) || 0,
+        variacion: parseFloat(r[2]) || 0,
+        notas: r[3] || '',
+      };
+    })
+    .filter(e => e.fecha);
+  return entries.slice(-n).reverse();
+}
+
+
+// Actualiza el valor total y opcionalmente los porcentajes de inversiones.
+async function updateInversiones(total, porcentajes) {
+  const spreadsheetId = config.sheetId;
+  const data = [];
+
+  // Siempre actualizar total (C10)
+  data.push({
+    range: 'Inversiones!C10',
+    values: [[total]],
+  });
+
+  // Actualizar porcentajes si se proporcionan
+  if (porcentajes && porcentajes.length > 0) {
+    const pctValues = porcentajes.map(p => [p / 100]);
+    data.push({
+      range: `Inversiones!B4:B${3 + porcentajes.length}`,
+      values: pctValues,
+    });
+  }
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: { valueInputOption: 'USER_ENTERED', data },
+  });
+}
+
+
+// Agrega una entrada al historial de inversiones.
+async function appendInversionesHistorial(fecha, total, notas) {
+  const spreadsheetId = config.sheetId;
+
+  // Contar filas existentes
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Inversiones!A14:A',
+  });
+  const existingRows = response.data.values ? response.data.values.length : 0;
+  const nextRow = existingRows + 14;
+
+  // Escribir A-B (skip C que tiene ARRAYFORMULA)
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Inversiones!A${nextRow}:B${nextRow}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: {
+      values: [[fecha, total]],
+    },
+  });
+
+  // Escribir D (notas, saltando C)
+  if (notas) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `Inversiones!D${nextRow}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[notas]],
+      },
+    });
+  }
+}
+
+
 module.exports = {
   sheets, testConnection, appendTransaction, setupPhase4, setupDashboard, setupDashboardCards, setupEstilos,
   getBalance, getMonthlyTransactions, getGastosFijos, updateGastoFijoMonto, getLastTransactions,
@@ -2611,4 +2978,5 @@ module.exports = {
   getSharedUnsettled, settleTransaction, setupSaldado, setupFrecuencia,
   setupEstilosDark,
   setupCrypto, getCryptoHoldings, getCryptoTransactions, appendCryptoTransaction, addCryptoHolding,
+  setupInversiones, getInversiones, getInversionesHistorial, updateInversiones, appendInversionesHistorial,
 };

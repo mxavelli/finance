@@ -100,12 +100,14 @@ El salario llega en USD a Deel y se distribuye en 3 bolsillos:
 | Resumen semanal | Cron lunes 9:00 AM BA: resumen compartido con totales, top categorías, balance, alertas presupuesto. Ambos usuarios reciben el mismo mensaje | 2026-02-19 |
 | Scheduler separado | `scheduler.js` encapsula todos los cron jobs. Recibe contexto compartido para evitar dependencias circulares con index.js | 2026-02-19 |
 | getPresupuestos() | Lee Presupuesto ARS (3 secciones) + USD (1 sección). Retorna Map con clave `"categoria\|tipo\|moneda"` → monto mensual | 2026-02-19 |
-| Menú persistente | ReplyKeyboard de grammY con 11 botones (Registrar, Balance, Resumen, Tarjeta, Últimas, Cuotas, Flujo, Borrar, Saldar, Crypto, Ayuda). `is_persistent: true`, se envía en /start y en "no pude interpretar". Handlers extraídos como funciones nombradas reutilizables. Registro por lenguaje natural se mantiene intacto | 2026-02-22 |
+
 | Categorías Seguros e Impuestos | Nuevas categorías agregadas a la hoja Categorías. Validación de dropdowns actualizada a rango `A2:A50` para soportar futuras categorías | 2026-02-22 |
 | Saldar gastos compartidos | Columna Q "Saldado" en Transacciones. Fórmulas de Balance Compartido excluyen transacciones con Q="Sí". Comando /saldar muestra items compartidos pendientes agrupados por mes, usuario elige cuál marcar como saldado. No afecta Dashboard ni Resumen — solo el Balance | 2026-02-22 |
 | Frecuencia gastos fijos | Columnas I "Frecuencia" (Mensual/Trimestral/Anual) y J "Meses" (números separados por coma) en Gastos Fijos. /registrar\_fijos, /gastosfijos y auto-fijos filtran según mes actual. Anuales solo aparecen en su mes de renovación | 2026-02-22 |
 | Suscripciones Deel | 7 suscripciones identificadas del CSV de Deel Card: Discord Nitro, Discord Server Boost, Microsoft 365, Xbox Game Pass (mensuales), GearUp Portal (trimestral), 1Password y Krisp (anuales). Método Deel USD/Deel Card según moneda | 2026-02-22 |
 | Portafolio Crypto | Hoja "Crypto" (10a) con holdings auto-derivados de transacciones (SUMIFS) y precio live via GOOGLEFINANCE("CURRENCY:ETHUSD"). Comando /crypto muestra portafolio, permite registrar compras/ventas. Dashboard Streamlit con sección Crypto + integración en Ahorro | 2026-02-22 |
+| Portafolio Inversiones | Hoja "Inversiones" (11a) con portafolio de inversiones en PPI (Acciones, CEDEARs, FCIs). Valor total + composición porcentual, actualización manual. Comando /inversiones muestra total y composición, permite actualizar valor total y porcentajes. Historial de valor con variación calculada. Dashboard con sección Inversiones + integración en Ahorro | 2026-02-22 |
+| Menú persistente | ReplyKeyboard de grammY con 12 botones (Registrar, Balance, Resumen, Tarjeta, Últimas, Cuotas, Flujo, Borrar, Saldar, Crypto, Inversiones, Ayuda). `is_persistent: true`, se envía en /start y en "no pude interpretar". Handlers extraídos como funciones nombradas reutilizables. Registro por lenguaje natural se mantiene intacto | 2026-02-22 |
 
 ---
 
@@ -182,6 +184,7 @@ El salario llega en USD a Deel y se distribuye en 3 bolsillos:
 8. **Categorías** — Referencia para dropdowns y keywords del bot
 9. **Cuotas** — Compras en cuotas con tracking de cuotas registradas y estado
 10. **Crypto** — Portafolio de criptomonedas con precio live (GOOGLEFINANCE) e historial de compras/ventas
+11. **Inversiones** — Portafolio de inversiones (PPI): valor total + composición porcentual (Acciones, CEDEARs, FCIs), historial de valor con variación
 
 ### Cuotas
 
@@ -227,6 +230,28 @@ El salario llega en USD a Deel y se distribuye en 3 bolsillos:
 | G | Total USD | ARRAYFORMULA: E*F |
 | H | Plataforma | Bybit, Binance, etc. |
 | I | Notas | Texto libre |
+
+### Inversiones
+
+**Portafolio (filas 4-9):**
+
+| Columna | Campo | Notas |
+|---------|-------|-------|
+| A | Tipo | Acciones, CEDEARs, FCIs, etc. |
+| B | Porcentaje | Decimal (0.148 = 14.8%). Formato % |
+| C | Valor ARS | Fórmula: B*$C$10 (total) |
+| D | Plataforma | PPI, etc. |
+
+Fila 10: TOTAL con B10=SUM(B4:B9), C10=valor total manual.
+
+**Historial de Valor (filas 14+):**
+
+| Columna | Campo | Notas |
+|---------|-------|-------|
+| A | Fecha | DD/MM/YYYY |
+| B | Valor Total ARS | Monto total del portafolio |
+| C | Variación ARS | ARRAYFORMULA: diferencia vs fila anterior |
+| D | Notas | Texto libre |
 
 ### Presupuesto (ARS y USD)
 
@@ -340,6 +365,7 @@ Archivo `.env` en la **raíz del proyecto** (no en `bot/`).
 | `/ingreso [monto] [desc]` | Registrar ingreso extra (se suma al mes actual) |
 | `/saldar` | Marcar gastos compartidos como saldados (columna Q en Transacciones) |
 | `/crypto` | Portafolio crypto: ver holdings con precio live, registrar compras/ventas |
+| `/inversiones` | Portafolio inversiones (PPI): ver total y composición, actualizar valor y porcentajes |
 | Texto libre | Parsea como transacción, muestra preview con botones |
 | ✅ Confirmar | Guarda la transacción en Google Sheets |
 | ❌ Cancelar | Descarta la transacción |
