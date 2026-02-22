@@ -58,6 +58,7 @@ with st.sidebar:
         'Métodos de pago',
         'Cuotas activas',
         'Flujo de caja',
+        'Ahorro',
         'Gastos fijos',
         'Comparativo M vs O',
     ])
@@ -486,6 +487,12 @@ def render_flujo(mes, anio):
             st.markdown(f'- Banco: {formato_ars(banco)}')
             st.markdown(f'- Efectivo: {formato_ars(efectivo)}')
 
+    # Gastos fijos estimados
+    df_fijos = cargar_gastos_fijos()
+    if not df_fijos.empty:
+        fijos_ars = df_fijos[df_fijos['moneda'] == 'ARS']['monto'].sum()
+        st.metric('Gastos Fijos estimados', formato_ars(fijos_ars))
+
     color_sobrante = 'normal' if sobrante_ars >= 0 else 'inverse'
     st.metric('Sobrante ARS', formato_ars(sobrante_ars),
               delta=f'{sobrante_ars / total_ingresos_ars * 100:.0f}% del ingreso' if total_ingresos_ars > 0 else None,
@@ -504,7 +511,73 @@ def render_flujo(mes, anio):
     c4.metric('Queda en Deel', formato_usd(queda_deel))
 
 
-# --- 9. Gastos fijos ---
+# --- 9. Ahorro ---
+
+def render_ahorro(mes, anio):
+    st.header(f'Ahorro — {nombre_mes(mes)} {anio}')
+
+    df = cargar_transacciones()
+    if df.empty:
+        st.info('No hay transacciones.')
+        return
+
+    df_ahorro = df[df['categoria'].str.contains('Ahorro', case=False, na=False)]
+    df_ahorro_anio = df_ahorro[df_ahorro['anio'] == anio]
+    df_ahorro_mes = df_ahorro_anio[df_ahorro_anio['mes'] == mes]
+
+    # Ahorro del mes
+    ahorro_ars_mes = df_ahorro_mes[df_ahorro_mes['moneda'] == 'ARS']['monto'].sum()
+    ahorro_usd_mes = df_ahorro_mes[df_ahorro_mes['moneda'] == 'USD']['monto'].sum()
+
+    st.subheader(f'{nombre_mes(mes)}')
+    c1, c2 = st.columns(2)
+    c1.metric('Ahorro ARS', formato_ars(ahorro_ars_mes))
+    c2.metric('Ahorro USD', formato_usd(ahorro_usd_mes))
+
+    st.divider()
+
+    # Ahorro acumulado del año
+    ahorro_ars_acum = df_ahorro_anio[df_ahorro_anio['moneda'] == 'ARS']['monto'].sum()
+    ahorro_usd_acum = df_ahorro_anio[df_ahorro_anio['moneda'] == 'USD']['monto'].sum()
+
+    st.subheader(f'Acumulado {anio}')
+    c1, c2 = st.columns(2)
+    c1.metric('Ahorro ARS (año)', formato_ars(ahorro_ars_acum))
+    c2.metric('Ahorro USD (año)', formato_usd(ahorro_usd_acum))
+
+    st.divider()
+
+    # Tendencia mensual de ahorro
+    meses_labels = []
+    ahorro_ars_vals = []
+    ahorro_usd_vals = []
+    for m in range(1, 13):
+        df_m = df_ahorro_anio[df_ahorro_anio['mes'] == m]
+        meses_labels.append(nombre_mes_corto(m))
+        ahorro_ars_vals.append(df_m[df_m['moneda'] == 'ARS']['monto'].sum())
+        ahorro_usd_vals.append(df_m[df_m['moneda'] == 'USD']['monto'].sum())
+
+    if any(v > 0 for v in ahorro_ars_vals):
+        st.plotly_chart(grafico_lineas(meses_labels, {'Ahorro ARS': ahorro_ars_vals},
+                                       'Ahorro ARS mensual'), use_container_width=True)
+
+    if any(v > 0 for v in ahorro_usd_vals):
+        st.plotly_chart(grafico_lineas(meses_labels, {'Ahorro USD': ahorro_usd_vals},
+                                       'Ahorro USD mensual', es_usd=True),
+                        use_container_width=True)
+
+    # Detalle transacciones de ahorro del mes
+    if not df_ahorro_mes.empty:
+        st.divider()
+        st.subheader('Detalle')
+        for _, row in df_ahorro_mes.iterrows():
+            st.markdown(
+                f"- {row['descripcion']} — {formato_moneda(row['monto'], row['moneda'])} "
+                f"({row['metodo_pago']})"
+            )
+
+
+# --- 10. Gastos fijos ---
 
 def render_fijos(mes, anio):
     st.header(f'Gastos fijos — {nombre_mes(mes)}')
@@ -619,6 +692,8 @@ elif seccion == 'Cuotas activas':
     render_cuotas(mes, anio)
 elif seccion == 'Flujo de caja':
     render_flujo(mes, anio)
+elif seccion == 'Ahorro':
+    render_ahorro(mes, anio)
 elif seccion == 'Gastos fijos':
     render_fijos(mes, anio)
 elif seccion == 'Comparativo M vs O':
