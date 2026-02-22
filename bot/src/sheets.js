@@ -116,8 +116,8 @@ async function setupPhase4() {
     ['Transacciones_Categoria', txId, 3, 4, 1, MAX_TX + 1],   // D2:D201
     ['Transacciones_Moneda', txId, 5, 6, 1, MAX_TX + 1],      // F2:F201
     ['Transacciones_Tipo', txId, 7, 8, 1, MAX_TX + 1],        // H2:H201
-    ['Lista_Categorias', catId, 0, 1, 1, 12],                  // A2:A12
-    ['Keywords_Categorias', catId, 1, 2, 1, 12],                // B2:B12
+    ['Lista_Categorias', catId, 0, 1, 1, 50],                  // A2:A50
+    ['Keywords_Categorias', catId, 1, 2, 1, 50],                // B2:B50
   ];
 
   for (const [name, sId, startCol, endCol, startRow, endRow] of namedRanges) {
