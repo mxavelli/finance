@@ -242,7 +242,16 @@ def render_resumen(mes, anio):
         label_ingreso = 'Ingresos ARS'
         label_gasto = 'Gastado ARS'
 
-    sobrante = total_ingresos - total_ars
+    # Restar inversiones (PPI) para que el sobrante refleje realidad
+    total_inversiones = 0
+    if usuario != 'Oriana':
+        try:
+            inv = cargar_inversiones()
+            total_inversiones = inv['total']
+        except Exception:
+            pass
+
+    sobrante = total_ingresos - total_ars - total_inversiones
 
     # Sobrante — lo más importante arriba
     if total_ingresos > 0:
@@ -250,6 +259,8 @@ def render_resumen(mes, anio):
         color = 'normal' if sobrante >= 0 else 'inverse'
         st.metric('Sobrante ARS', formato_ars(sobrante),
                   delta=f'{pct:.0f}% del ingreso', delta_color=color)
+        if total_inversiones > 0:
+            st.caption(f'Inversiones descontadas: {formato_ars(total_inversiones)}')
 
     # Métricas principales
     c1, c2 = st.columns(2)
@@ -659,7 +670,16 @@ def render_flujo(mes, anio):
         total_ingresos_ars = recibido_m + ingreso_o
         total_gastos_ars = df[df['moneda'] == 'ARS']['monto'].sum() if not df.empty else 0
 
-    sobrante_ars = total_ingresos_ars - total_gastos_ars
+    # Restar inversiones (PPI) del sobrante
+    total_inversiones = 0
+    if usuario != 'Oriana':
+        try:
+            inv = cargar_inversiones()
+            total_inversiones = inv['total']
+        except Exception:
+            pass
+
+    sobrante_ars = total_ingresos_ars - total_gastos_ars - total_inversiones
     total_gastos_usd = df[df['moneda'] == 'USD']['monto'].sum() if not df.empty else 0
 
     # Sección ARS
@@ -703,6 +723,8 @@ def render_flujo(mes, anio):
     st.metric('Sobrante ARS', formato_ars(sobrante_ars),
               delta=f'{sobrante_ars / total_ingresos_ars * 100:.0f}% del ingreso' if total_ingresos_ars > 0 else None,
               delta_color=color_sobrante)
+    if total_inversiones > 0:
+        st.caption(f'Inversiones descontadas: {formato_ars(total_inversiones)}')
 
     # Sección USD (solo Moises o Todos)
     if usuario != 'Oriana':
