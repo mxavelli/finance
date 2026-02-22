@@ -94,6 +94,7 @@ from src.datos import (
     cargar_transacciones, filtrar_mes, cargar_gastos_fijos, cargar_cuotas,
     cargar_balance, cargar_presupuesto_ars, cargar_presupuesto_usd,
     cargar_ingresos_moises, cargar_ingresos_oriana,
+    cargar_crypto_holdings, cargar_crypto_transacciones,
 )
 from src.formato import formato_ars, formato_usd, formato_moneda, nombre_mes, nombre_mes_corto
 from src.graficos import (
@@ -123,6 +124,7 @@ with st.sidebar:
         'Cuotas activas',
         'Flujo de caja',
         'Ahorro',
+        'Crypto',
         'Gastos fijos',
         'Comparativo M vs O',
     ])
@@ -651,8 +653,83 @@ def render_ahorro(mes, anio):
                 f"({row['metodo_pago']})"
             )
 
+    # Subsección crypto en ahorro
+    try:
+        df_crypto = cargar_crypto_holdings()
+        if not df_crypto.empty and df_crypto['cantidad'].sum() > 0:
+            st.divider()
+            st.subheader('Crypto')
+            df_active = df_crypto[df_crypto['cantidad'] > 0]
+            total_crypto = df_active['valor_usd'].sum()
+            st.metric('Total Crypto', formato_usd(total_crypto))
+            for _, h in df_active.iterrows():
+                st.markdown(
+                    f"- **{h['nombre']} ({h['simbolo']})**: {h['cantidad']:.6f} "
+                    f"@ {formato_usd(h['precio_usd'])} = {formato_usd(h['valor_usd'])}"
+                )
+    except Exception:
+        pass
 
-# --- 10. Gastos fijos ---
+
+# --- 10. Crypto ---
+
+def render_crypto(mes, anio):
+    st.header('Portafolio Crypto')
+
+    try:
+        df_holdings = cargar_crypto_holdings()
+    except Exception:
+        st.warning('No se pudo cargar la hoja Crypto.')
+        return
+
+    if df_holdings.empty or df_holdings['cantidad'].sum() == 0:
+        st.info('No hay holdings crypto.')
+        return
+
+    df_active = df_holdings[df_holdings['cantidad'] > 0]
+    total_crypto = df_active['valor_usd'].sum()
+
+    # Métrica principal
+    st.metric('Total Portafolio', formato_usd(total_crypto))
+
+    st.divider()
+
+    # Holdings individuales
+    for _, h in df_active.iterrows():
+        c1, c2, c3 = st.columns(3)
+        c1.metric(f"{h['simbolo']}", f"{h['cantidad']:.6f}")
+        c2.metric('Precio', formato_usd(h['precio_usd']))
+        c3.metric('Valor', formato_usd(h['valor_usd']))
+
+    # Dona de distribución si hay múltiples cryptos
+    if len(df_active) > 1:
+        st.divider()
+        st.plotly_chart(grafico_dona(
+            df_active['simbolo'].tolist(),
+            df_active['valor_usd'].tolist(),
+            'Distribución Crypto', es_usd=True, dark=dark,
+        ), use_container_width=True)
+
+    # Historial de movimientos
+    st.divider()
+    st.subheader('Historial de movimientos')
+    try:
+        df_tx = cargar_crypto_transacciones()
+        if df_tx.empty:
+            st.info('Sin movimientos registrados.')
+        else:
+            for _, tx in df_tx.iterrows():
+                emoji = '🟢' if tx['tipo'] == 'Compra' else '🔴'
+                fecha_str = tx['fecha'].strftime('%d/%m/%Y') if hasattr(tx['fecha'], 'strftime') else str(tx['fecha'])
+                st.markdown(
+                    f"{emoji} {fecha_str} — {tx['tipo']} {tx['cantidad']:.6f} {tx['crypto']} "
+                    f"a {formato_usd(tx['precio_usd'])} = {formato_usd(tx['total_usd'])} ({tx['plataforma']})"
+                )
+    except Exception:
+        st.warning('No se pudo cargar el historial.')
+
+
+# --- 11. Gastos fijos ---
 
 def render_fijos(mes, anio):
     st.header(f'Gastos fijos — {nombre_mes(mes)}')
@@ -769,6 +846,8 @@ elif seccion == 'Flujo de caja':
     render_flujo(mes, anio)
 elif seccion == 'Ahorro':
     render_ahorro(mes, anio)
+elif seccion == 'Crypto':
+    render_crypto(mes, anio)
 elif seccion == 'Gastos fijos':
     render_fijos(mes, anio)
 elif seccion == 'Comparativo M vs O':

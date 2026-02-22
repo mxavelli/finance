@@ -2211,6 +2211,397 @@ async function setupSaldado() {
   console.log('setupSaldado completado: header Q1 + fórmulas Balance Compartido actualizadas.');
 }
 
+// ====================================================================
+// CRYPTO — Portafolio de criptomonedas
+// ====================================================================
+
+// Mapping de símbolos a nombres conocidos
+const CRYPTO_NAMES = {
+  ETH: 'Ethereum', BTC: 'Bitcoin', SOL: 'Solana', BNB: 'Binance Coin',
+  ADA: 'Cardano', DOT: 'Polkadot', AVAX: 'Avalanche', MATIC: 'Polygon',
+  LINK: 'Chainlink', XRP: 'XRP', USDT: 'Tether', USDC: 'USD Coin',
+};
+
+// Crea hoja "Crypto" con holdings + historial de movimientos.
+// Ejecutar una sola vez: node -e "require('./src/sheets').setupCrypto()"
+async function setupCrypto() {
+  const spreadsheetId = config.sheetId;
+  function loc(f) { return f.replace(/,/g, ';'); }
+
+  // 1. Crear hoja
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{
+        addSheet: {
+          properties: {
+            title: 'Crypto',
+            tabColorStyle: { rgbColor: { red: 0.95, green: 0.75, blue: 0.10 } },
+          },
+        },
+      }],
+    },
+  });
+
+  // 2. Obtener sheetId
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const cryptoSheetId = meta.data.sheets.find(s => s.properties.title === 'Crypto').properties.sheetId;
+
+  // 3. Escribir títulos, headers y fórmulas
+  const data = [];
+
+  // Título holdings
+  data.push({ range: 'Crypto!A1', values: [['Portafolio Crypto']] });
+
+  // Headers holdings (fila 3)
+  data.push({
+    range: 'Crypto!A3:F3',
+    values: [['Crypto', 'Símbolo', 'Cantidad', 'Precio USD', 'Valor USD', 'Plataforma']],
+  });
+
+  // Fórmulas holdings (filas 4-20): Cantidad, Precio, Valor
+  const holdingFormulas = [];
+  for (let r = 4; r <= 20; r++) {
+    holdingFormulas.push([
+      // C: Cantidad = compras - ventas del historial
+      loc(`=IF(B${r}="";"";SUMIFS(E$26:E$5000,D$26:D$5000,B${r},C$26:C$5000,"Compra")-SUMIFS(E$26:E$5000,D$26:D$5000,B${r},C$26:C$5000,"Venta"))`),
+      // D: Precio live via GOOGLEFINANCE
+      loc(`=IF(B${r}="";"";IFERROR(GOOGLEFINANCE("CURRENCY:"&B${r}&"USD"),"N/A"))`),
+      // E: Valor = cantidad * precio
+      loc(`=IF(OR(C${r}="",C${r}=0);"";C${r}*D${r})`),
+    ]);
+  }
+  data.push({ range: 'Crypto!C4:E20', values: holdingFormulas });
+
+  // TOTAL (fila 22)
+  data.push({
+    range: 'Crypto!A22:E22',
+    values: [['TOTAL', '', '', '', loc('=SUM(E4:E20)')]],
+  });
+
+  // Título historial (fila 24)
+  data.push({ range: 'Crypto!A24', values: [['Historial de Movimientos']] });
+
+  // Headers historial (fila 25)
+  data.push({
+    range: 'Crypto!A25:I25',
+    values: [['Fecha', 'Hora', 'Tipo', 'Crypto', 'Cantidad', 'Precio USD', 'Total USD', 'Plataforma', 'Notas']],
+  });
+
+  // ARRAYFORMULA para Total USD en G26 (auto-calcula para todas las filas)
+  data.push({
+    range: 'Crypto!G26',
+    values: [[loc('=ARRAYFORMULA(IF(E26:E="";"";E26:E*F26:F))')]],
+  });
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: { valueInputOption: 'USER_ENTERED', data },
+  });
+
+  // 4. Estilos y validaciones
+  const requests = [];
+
+  // Merge título holdings A1:F1
+  requests.push({
+    mergeCells: {
+      range: { sheetId: cryptoSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 6 },
+      mergeType: 'MERGE_ALL',
+    },
+  });
+
+  // Estilo título holdings
+  requests.push({
+    repeatCell: {
+      range: { sheetId: cryptoSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 6 },
+      cell: {
+        userEnteredFormat: {
+          backgroundColor: { red: 0.15, green: 0.15, blue: 0.20 },
+          textFormat: { bold: true, fontSize: 14, foregroundColor: { red: 0.95, green: 0.75, blue: 0.10 } },
+          horizontalAlignment: 'CENTER',
+        },
+      },
+      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+    },
+  });
+
+  // Headers holdings (fila 3) — dorado con texto oscuro
+  requests.push({
+    repeatCell: {
+      range: { sheetId: cryptoSheetId, startRowIndex: 2, endRowIndex: 3, startColumnIndex: 0, endColumnIndex: 6 },
+      cell: {
+        userEnteredFormat: {
+          backgroundColor: { red: 0.95, green: 0.75, blue: 0.10 },
+          textFormat: { bold: true, foregroundColor: { red: 0.10, green: 0.10, blue: 0.10 } },
+          horizontalAlignment: 'CENTER',
+        },
+      },
+      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+    },
+  });
+
+  // TOTAL fila 22 — negrita con fondo gris
+  requests.push({
+    repeatCell: {
+      range: { sheetId: cryptoSheetId, startRowIndex: 21, endRowIndex: 22, startColumnIndex: 0, endColumnIndex: 6 },
+      cell: {
+        userEnteredFormat: {
+          backgroundColor: { red: 0.90, green: 0.90, blue: 0.90 },
+          textFormat: { bold: true },
+          horizontalAlignment: 'CENTER',
+        },
+      },
+      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+    },
+  });
+
+  // Merge título historial A24:I24
+  requests.push({
+    mergeCells: {
+      range: { sheetId: cryptoSheetId, startRowIndex: 23, endRowIndex: 24, startColumnIndex: 0, endColumnIndex: 9 },
+      mergeType: 'MERGE_ALL',
+    },
+  });
+
+  // Estilo título historial
+  requests.push({
+    repeatCell: {
+      range: { sheetId: cryptoSheetId, startRowIndex: 23, endRowIndex: 24, startColumnIndex: 0, endColumnIndex: 9 },
+      cell: {
+        userEnteredFormat: {
+          backgroundColor: { red: 0.15, green: 0.15, blue: 0.20 },
+          textFormat: { bold: true, fontSize: 12, foregroundColor: { red: 0.95, green: 0.75, blue: 0.10 } },
+          horizontalAlignment: 'CENTER',
+        },
+      },
+      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+    },
+  });
+
+  // Headers historial (fila 25) — dorado
+  requests.push({
+    repeatCell: {
+      range: { sheetId: cryptoSheetId, startRowIndex: 24, endRowIndex: 25, startColumnIndex: 0, endColumnIndex: 9 },
+      cell: {
+        userEnteredFormat: {
+          backgroundColor: { red: 0.95, green: 0.75, blue: 0.10 },
+          textFormat: { bold: true, foregroundColor: { red: 0.10, green: 0.10, blue: 0.10 } },
+          horizontalAlignment: 'CENTER',
+        },
+      },
+      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+    },
+  });
+
+  // Dropdown Tipo en historial (col C = index 2, filas 26+)
+  requests.push({
+    setDataValidation: {
+      range: { sheetId: cryptoSheetId, startRowIndex: 25, endRowIndex: 5000, startColumnIndex: 2, endColumnIndex: 3 },
+      rule: {
+        condition: { type: 'ONE_OF_LIST', values: [
+          { userEnteredValue: 'Compra' },
+          { userEnteredValue: 'Venta' },
+        ]},
+        showCustomUi: true, strict: true,
+      },
+    },
+  });
+
+  // Freeze fila 3 (headers holdings)
+  requests.push({
+    updateSheetProperties: {
+      properties: { sheetId: cryptoSheetId, gridProperties: { frozenRowCount: 3 } },
+      fields: 'gridProperties.frozenRowCount',
+    },
+  });
+
+  // Anchos de columna — Holdings (A-F)
+  const holdingWidths = [130, 80, 120, 120, 130, 110];
+  for (let i = 0; i < holdingWidths.length; i++) {
+    requests.push({
+      updateDimensionProperties: {
+        range: { sheetId: cryptoSheetId, dimension: 'COLUMNS', startIndex: i, endIndex: i + 1 },
+        properties: { pixelSize: holdingWidths[i] },
+        fields: 'pixelSize',
+      },
+    });
+  }
+  // Columnas G-I (historial extra)
+  const histWidths = [[6, 130], [7, 110], [8, 150]]; // G=Total, H=Plataforma, I=Notas
+  for (const [idx, w] of histWidths) {
+    requests.push({
+      updateDimensionProperties: {
+        range: { sheetId: cryptoSheetId, dimension: 'COLUMNS', startIndex: idx, endIndex: idx + 1 },
+        properties: { pixelSize: w },
+        fields: 'pixelSize',
+      },
+    });
+  }
+
+  // Formato numérico: cantidad crypto (col C holdings + col E historial) — 8 decimales
+  for (const [startCol, endCol, startRow, endRow] of [[2, 3, 3, 21], [4, 5, 25, 5000]]) {
+    requests.push({
+      repeatCell: {
+        range: { sheetId: cryptoSheetId, startRowIndex: startRow, endRowIndex: endRow, startColumnIndex: startCol, endColumnIndex: endCol },
+        cell: { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '#,##0.00000000' } } },
+        fields: 'userEnteredFormat.numberFormat',
+      },
+    });
+  }
+
+  // Formato USD: cols D, E holdings + cols F, G historial — 2 decimales
+  for (const [startCol, endCol, startRow, endRow] of [[3, 5, 3, 22], [5, 7, 25, 5000]]) {
+    requests.push({
+      repeatCell: {
+        range: { sheetId: cryptoSheetId, startRowIndex: startRow, endRowIndex: endRow, startColumnIndex: startCol, endColumnIndex: endCol },
+        cell: { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '#,##0.00' } } },
+        fields: 'userEnteredFormat.numberFormat',
+      },
+    });
+  }
+
+  // Filas alternadas holdings (4-20)
+  for (let r = 3; r < 20; r += 2) {
+    requests.push({
+      repeatCell: {
+        range: { sheetId: cryptoSheetId, startRowIndex: r, endRowIndex: r + 1, startColumnIndex: 0, endColumnIndex: 6 },
+        cell: { userEnteredFormat: { backgroundColor: { red: 0.97, green: 0.95, blue: 0.88 } } },
+        fields: 'userEnteredFormat.backgroundColor',
+      },
+    });
+  }
+
+  await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+
+  console.log('Hoja Crypto creada con holdings, historial, fórmulas GOOGLEFINANCE y estilos.');
+}
+
+
+// Lee holdings crypto (filas 4-20).
+async function getCryptoHoldings() {
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: config.sheetId,
+    range: 'Crypto!A4:F20',
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  });
+  const rows = response.data.values || [];
+  return rows
+    .map((r, i) => ({
+      row: i + 4,
+      nombre: r[0] || '',
+      simbolo: r[1] || '',
+      cantidad: parseFloat(r[2]) || 0,
+      precioUsd: parseFloat(r[3]) || 0,
+      valorUsd: parseFloat(r[4]) || 0,
+      plataforma: r[5] || '',
+    }))
+    .filter(h => h.simbolo);
+}
+
+
+// Lee las últimas N transacciones crypto.
+async function getCryptoTransactions(n = 10) {
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: config.sheetId,
+    range: 'Crypto!A26:I',
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  });
+  const rows = response.data.values || [];
+  const transactions = rows
+    .map((r, i) => {
+      while (r.length < 9) r.push('');
+      // Fecha puede venir como serial de Google Sheets con UNFORMATTED_VALUE
+      let fecha = r[0] || '';
+      if (typeof fecha === 'number' && fecha > 40000) {
+        const d = new Date(Date.UTC(1899, 11, 30 + fecha));
+        fecha = `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`;
+      }
+      return {
+        row: i + 26,
+        fecha,
+        hora: r[1] || '',
+        tipo: r[2] || '',
+        crypto: r[3] || '',
+        cantidad: parseFloat(r[4]) || 0,
+        precioUsd: parseFloat(r[5]) || 0,
+        totalUsd: parseFloat(r[6]) || 0,
+        plataforma: r[7] || '',
+        notas: r[8] || '',
+      };
+    })
+    .filter(tx => tx.fecha);
+  return transactions.slice(-n).reverse();
+}
+
+
+// Agrega una transacción crypto en la siguiente fila vacía del historial.
+async function appendCryptoTransaction(tx) {
+  const spreadsheetId = config.sheetId;
+
+  // Contar filas existentes
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Crypto!A26:A',
+  });
+  const existingRows = response.data.values ? response.data.values.length : 0;
+  const nextRow = existingRows + 26;
+
+  // Escribir A-F (skip G que tiene ARRAYFORMULA)
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Crypto!A${nextRow}:F${nextRow}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: {
+      values: [[tx.fecha, tx.hora, tx.tipo, tx.crypto, tx.cantidad, tx.precioUsd]],
+    },
+  });
+
+  // Escribir H-I (plataforma y notas, saltando G)
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Crypto!H${nextRow}:I${nextRow}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: {
+      values: [[tx.plataforma, tx.notas || '']],
+    },
+  });
+}
+
+
+// Agrega una nueva crypto a la sección de holdings (primera fila vacía en A4:A20).
+// Las fórmulas de Cantidad, Precio y Valor ya están escritas por setupCrypto.
+async function addCryptoHolding(simbolo, plataforma) {
+  const spreadsheetId = config.sheetId;
+
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Crypto!B4:B20',
+  });
+  const existingRows = response.data.values ? response.data.values.length : 0;
+  const nextRow = existingRows + 4;
+
+  if (nextRow > 20) {
+    throw new Error('Máximo 17 cryptos alcanzado.');
+  }
+
+  const nombre = CRYPTO_NAMES[simbolo] || simbolo;
+
+  // Escribir nombre y símbolo (cols A-B) + plataforma (col F)
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Crypto!A${nextRow}:B${nextRow}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[nombre, simbolo]] },
+  });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Crypto!F${nextRow}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[plataforma]] },
+  });
+}
+
+
 module.exports = {
   sheets, testConnection, appendTransaction, setupPhase4, setupDashboard, setupDashboardCards, setupEstilos,
   getBalance, getMonthlyTransactions, getGastosFijos, updateGastoFijoMonto, getLastTransactions,
@@ -2219,4 +2610,5 @@ module.exports = {
   extendSheetLimits, setupFormatos, getPresupuestos,
   getSharedUnsettled, settleTransaction, setupSaldado, setupFrecuencia,
   setupEstilosDark,
+  setupCrypto, getCryptoHoldings, getCryptoTransactions, appendCryptoTransaction, addCryptoHolding,
 };

@@ -9,6 +9,7 @@ const {
   getIncomeStatus, registerIncome, getCurrentIncome, updateIncome, getFlowData,
   getCuotas, appendCuota, updateCuotaRegistradas, updateCuotaMonto,
   getPresupuestos, getSharedUnsettled, settleTransaction,
+  getCryptoHoldings, getCryptoTransactions, appendCryptoTransaction, addCryptoHolding,
 } = require('./sheets');
 const { getCategories } = require('./categories');
 const { parseTransaction, formatAmount } = require('./parser');
@@ -32,6 +33,7 @@ const pendingFijos = new Map();     // Gastos fijos pendientes de registro
 const pendingFixedEdit = new Map(); // Edicion de monto de gasto fijo (userId → estado)
 const pendingCuotaEdit = new Map(); // Ajuste de monto cuota post-confirmacion (userId → estado)
 const pendingSettle = new Map();   // Saldados pendientes de confirmacion
+const pendingCrypto = new Map();   // Operaciones crypto pendientes
 let txCounter = 0;
 const TX_TTL = 10 * 60 * 1000; // 10 minutos
 
@@ -60,7 +62,8 @@ const mainMenu = new Keyboard()
   .text('📊 Resumen').text('💳 Tarjeta').row()
   .text('📝 Últimas').text('🔄 Cuotas').row()
   .text('💵 Flujo').text('🗑 Borrar').row()
-  .text('🤝 Saldar').text('❓ Ayuda')
+  .text('🤝 Saldar').text('💎 Crypto').row()
+  .text('❓ Ayuda')
   .resized().persistent();
 
 // Mapeo botón del menú → nombre de comando
@@ -74,6 +77,7 @@ const MENU_MAP = {
   '💵 Flujo':      'flujo',
   '🗑 Borrar':     'borrar',
   '🤝 Saldar':     'saldar',
+  '💎 Crypto':     'crypto',
   '❓ Ayuda':      'start',
 };
 
@@ -724,6 +728,168 @@ async function cmdSaldar(ctx) {
 }
 bot.command('saldar', cmdSaldar);
 
+
+// ============================================
+// /crypto — Portafolio de criptomonedas
+// ============================================
+
+function fmtUsd(n) {
+  return 'US$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+async function cmdCrypto(ctx) {
+  try {
+    cleanMap(pendingCrypto);
+    const holdings = await getCryptoHoldings();
+    const activos = holdings.filter(h => h.cantidad > 0);
+
+    if (activos.length === 0) {
+      const keyboard = new InlineKeyboard()
+        .text('➕ Compra', 'crypto_buy');
+      return ctx.reply(
+        '💎 *Portafolio Crypto*\n\nNo hay holdings registrados.',
+        { parse_mode: 'Markdown', reply_markup: keyboard }
+      );
+    }
+
+    let text = '💎 *Portafolio Crypto*\n\n';
+    let totalUsd = 0;
+
+    for (const h of activos) {
+      text += `*${h.nombre} (${h.simbolo})*\n`;
+      text += `📊 ${h.cantidad} ${h.simbolo}\n`;
+      if (h.precioUsd > 0) {
+        text += `💲 Precio: ${fmtUsd(h.precioUsd)}\n`;
+        text += `💰 Valor: ${fmtUsd(h.valorUsd)}\n`;
+      } else {
+        text += `💲 Precio: N/A\n`;
+      }
+      text += `📍 ${h.plataforma}\n\n`;
+      totalUsd += h.valorUsd || 0;
+    }
+
+    text += `*Total: ${fmtUsd(totalUsd)}*`;
+
+    const keyboard = new InlineKeyboard()
+      .text('➕ Compra', 'crypto_buy')
+      .text('➖ Venta', 'crypto_sell')
+      .row()
+      .text('📜 Historial', 'crypto_hist');
+
+    await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: keyboard });
+  } catch (error) {
+    console.error('Error en /crypto:', error.message);
+    ctx.reply('Error consultando crypto. Revisá los logs.');
+  }
+}
+bot.command('crypto', cmdCrypto);
+
+// Callback: iniciar compra crypto
+bot.callbackQuery('crypto_buy', async (ctx) => {
+  pendingCrypto.set(ctx.from.id, { action: 'buy_waiting', createdAt: Date.now() });
+  await ctx.editMessageText(
+    '➕ *Compra Crypto*\n\n' +
+    'Escribí la compra:\n' +
+    '`cantidad simbolo precio plataforma`\n\n' +
+    'Ejemplo: `0.05 ETH 2650 Bybit`',
+    { parse_mode: 'Markdown' }
+  );
+  await ctx.answerCallbackQuery();
+});
+
+// Callback: iniciar venta crypto
+bot.callbackQuery('crypto_sell', async (ctx) => {
+  pendingCrypto.set(ctx.from.id, { action: 'sell_waiting', createdAt: Date.now() });
+  await ctx.editMessageText(
+    '➖ *Venta Crypto*\n\n' +
+    'Escribí la venta:\n' +
+    '`cantidad simbolo precio plataforma`\n\n' +
+    'Ejemplo: `0.02 ETH 2800 Bybit`',
+    { parse_mode: 'Markdown' }
+  );
+  await ctx.answerCallbackQuery();
+});
+
+// Callback: historial crypto
+bot.callbackQuery('crypto_hist', async (ctx) => {
+  try {
+    const transactions = await getCryptoTransactions(10);
+    if (transactions.length === 0) {
+      await ctx.answerCallbackQuery({ text: 'Sin movimientos' });
+      return;
+    }
+    let text = '📜 *Últimos movimientos crypto*\n\n';
+    for (const tx of transactions) {
+      const emoji = tx.tipo === 'Compra' ? '🟢' : '🔴';
+      text += `${emoji} ${tx.fecha} — ${tx.tipo} ${tx.cantidad} ${tx.crypto} a ${fmtUsd(tx.precioUsd)} (${tx.plataforma})\n`;
+    }
+    await ctx.editMessageText(text, { parse_mode: 'Markdown' });
+    await ctx.answerCallbackQuery();
+  } catch (error) {
+    console.error('Error historial crypto:', error.message);
+    await ctx.answerCallbackQuery({ text: 'Error' });
+  }
+});
+
+// Callback: confirmar operación crypto
+bot.callbackQuery(/^crypto_ok:(\d+)$/, async (ctx) => {
+  const cryptoId = parseInt(ctx.match[1]);
+  const pending = pendingCrypto.get(cryptoId);
+  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'No autorizado.' });
+
+  pendingCrypto.delete(cryptoId);
+
+  try {
+    const { month, year, day } = getNowBA();
+    const fechaStr = `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
+    const now = new Date();
+    const horaStr = now.toLocaleTimeString('en-US', {
+      timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+
+    await appendCryptoTransaction({
+      fecha: fechaStr,
+      hora: horaStr,
+      tipo: pending.tipo,
+      crypto: pending.simbolo,
+      cantidad: pending.cantidad,
+      precioUsd: pending.precio,
+      plataforma: pending.plataforma,
+      notas: '',
+    });
+
+    // Si es crypto nueva, agregarla a holdings
+    const holdings = await getCryptoHoldings();
+    const exists = holdings.some(h => h.simbolo === pending.simbolo);
+    if (!exists) {
+      await addCryptoHolding(pending.simbolo, pending.plataforma);
+    }
+
+    const emoji = pending.tipo === 'Compra' ? '🟢' : '🔴';
+    await ctx.editMessageText(
+      `✅ *${pending.tipo} registrada*\n\n` +
+      `${emoji} ${pending.cantidad} ${pending.simbolo} a ${fmtUsd(pending.precio)} = ${fmtUsd(pending.total)}\n` +
+      `📍 ${pending.plataforma}`,
+      { parse_mode: 'Markdown' }
+    );
+    await ctx.answerCallbackQuery({ text: `${pending.tipo} registrada` });
+  } catch (error) {
+    console.error('Error registrando crypto:', error.message);
+    await ctx.editMessageText('Error registrando. Revisá los logs.');
+    await ctx.answerCallbackQuery({ text: 'Error' });
+  }
+});
+
+// Callback: cancelar operación crypto
+bot.callbackQuery(/^crypto_no:(\d+)$/, async (ctx) => {
+  const cryptoId = parseInt(ctx.match[1]);
+  pendingCrypto.delete(cryptoId);
+  await ctx.editMessageText('Operación cancelada.');
+  await ctx.answerCallbackQuery({ text: 'Cancelado' });
+});
+
+
 // Mapa de handlers para el menú persistente
 const CMD_HANDLERS = {
   start: cmdStart,
@@ -736,6 +902,7 @@ const CMD_HANDLERS = {
   registrar_fijos: cmdRegistrarFijos,
   borrar: cmdBorrar,
   saldar: cmdSaldar,
+  crypto: cmdCrypto,
 };
 
 // /ingreso [monto] [descripcion] — registrar ingreso extra
@@ -938,6 +1105,61 @@ bot.on('message:text', async (ctx) => {
     const menuCmd = MENU_MAP[text];
     if (menuCmd && CMD_HANDLERS[menuCmd]) {
       return CMD_HANDLERS[menuCmd](ctx);
+    }
+
+    // Interceptar si el usuario está registrando compra/venta crypto
+    const cryptoPending = pendingCrypto.get(ctx.from.id);
+    if (cryptoPending && (cryptoPending.action === 'buy_waiting' || cryptoPending.action === 'sell_waiting')) {
+      const parts = text.split(/\s+/);
+      if (parts.length < 3) {
+        return ctx.reply('Formato: `cantidad simbolo precio [plataforma]`\nEjemplo: `0.05 ETH 2650 Bybit`', { parse_mode: 'Markdown' });
+      }
+
+      const cantidad = parseFloat(parts[0]);
+      const simbolo = parts[1].toUpperCase();
+      const precio = parseFloat(parts[2]);
+      const plataforma = parts.slice(3).join(' ') || 'Bybit';
+
+      if (isNaN(cantidad) || cantidad <= 0 || isNaN(precio) || precio <= 0) {
+        return ctx.reply('Cantidad y precio deben ser números positivos.');
+      }
+
+      const tipo = cryptoPending.action === 'buy_waiting' ? 'Compra' : 'Venta';
+
+      // Validar cantidad disponible para ventas
+      if (tipo === 'Venta') {
+        const holdings = await getCryptoHoldings();
+        const holding = holdings.find(h => h.simbolo === simbolo);
+        if (!holding || holding.cantidad < cantidad) {
+          const disponible = holding ? holding.cantidad : 0;
+          return ctx.reply(`No tenés suficiente ${simbolo}. Disponible: ${disponible}`);
+        }
+      }
+
+      const total = cantidad * precio;
+      pendingCrypto.delete(ctx.from.id);
+
+      const cryptoId = ++txCounter;
+      pendingCrypto.set(cryptoId, {
+        tipo, simbolo, cantidad, precio, plataforma, total,
+        userId: ctx.from.id,
+        createdAt: Date.now(),
+      });
+
+      const emoji = tipo === 'Compra' ? '🟢' : '🔴';
+      const keyboard = new InlineKeyboard()
+        .text('✅ Confirmar', `crypto_ok:${cryptoId}`)
+        .text('❌ Cancelar', `crypto_no:${cryptoId}`);
+
+      return ctx.reply(
+        `${emoji} *${tipo} Crypto*\n\n` +
+        `Crypto: *${simbolo}*\n` +
+        `Cantidad: ${cantidad}\n` +
+        `Precio: ${fmtUsd(precio)}\n` +
+        `Total: ${fmtUsd(total)}\n` +
+        `Plataforma: ${plataforma}`,
+        { parse_mode: 'Markdown', reply_markup: keyboard }
+      );
     }
 
     // Interceptar si el usuario está ajustando monto de cuota (con interés)

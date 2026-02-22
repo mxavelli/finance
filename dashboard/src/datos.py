@@ -320,6 +320,66 @@ def cargar_ingresos_oriana():
     return pd.DataFrame(rows)
 
 
+# --- Crypto ---
+
+@st.cache_data(ttl=300)
+def cargar_crypto_holdings():
+    """Lee holdings crypto y retorna un DataFrame."""
+    sheet = get_sheet()
+    ws = sheet.worksheet('Crypto')
+    data = ws.get('A4:F20', value_render_option='UNFORMATTED_VALUE')
+    if not data:
+        return pd.DataFrame(columns=['nombre', 'simbolo', 'cantidad', 'precio_usd', 'valor_usd', 'plataforma'])
+    rows = []
+    for r in data:
+        while len(r) < 6:
+            r.append(None)
+        if not r[0]:
+            continue
+        rows.append({
+            'nombre': r[0] or '',
+            'simbolo': r[1] or '',
+            'cantidad': _safe_float(r[2]),
+            'precio_usd': _safe_float(r[3]),
+            'valor_usd': _safe_float(r[4]),
+            'plataforma': r[5] or '',
+        })
+    return pd.DataFrame(rows) if rows else pd.DataFrame(
+        columns=['nombre', 'simbolo', 'cantidad', 'precio_usd', 'valor_usd', 'plataforma'])
+
+
+@st.cache_data(ttl=300)
+def cargar_crypto_transacciones():
+    """Lee historial de movimientos crypto."""
+    sheet = get_sheet()
+    ws = sheet.worksheet('Crypto')
+    data = ws.get('A26:I', value_render_option='UNFORMATTED_VALUE')
+    if not data:
+        return pd.DataFrame(columns=['fecha', 'hora', 'tipo', 'crypto', 'cantidad',
+                                     'precio_usd', 'total_usd', 'plataforma', 'notas'])
+    rows = []
+    for r in data:
+        while len(r) < 9:
+            r.append(None)
+        fecha = _parse_fecha_serial(r[0])
+        if fecha is None:
+            continue
+        rows.append({
+            'fecha': fecha,
+            'hora': _parse_hora_serial(r[1]),
+            'tipo': r[2] or '',
+            'crypto': r[3] or '',
+            'cantidad': _safe_float(r[4]),
+            'precio_usd': _safe_float(r[5]),
+            'total_usd': _safe_float(r[6]),
+            'plataforma': r[7] or '',
+            'notas': r[8] or '',
+        })
+    return pd.DataFrame(rows) if rows else pd.DataFrame(
+        columns=['fecha', 'hora', 'tipo', 'crypto', 'cantidad',
+                 'precio_usd', 'total_usd', 'plataforma', 'notas'])
+
+
 # --- Helpers internos ---
 
 def _safe_float(val):
