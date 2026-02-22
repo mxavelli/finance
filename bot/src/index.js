@@ -1,7 +1,7 @@
 // Punto de entrada del bot de Telegram.
 // Fase 5: flujo completo con consultas, borrado e ingresos.
 
-const { Bot, InlineKeyboard } = require('grammy');
+const { Bot, InlineKeyboard, Keyboard } = require('grammy');
 const config = require('./config');
 const {
   appendTransaction, getBalance, getMonthlyTransactions,
@@ -52,6 +52,28 @@ function cleanMap(map) {
     if (now - entry.createdAt > TX_TTL) map.delete(id);
   }
 }
+
+// Menú persistente (ReplyKeyboard) — siempre visible en la parte inferior del chat
+const mainMenu = new Keyboard()
+  .text('📋 Registrar').text('💰 Balance').row()
+  .text('📊 Resumen').text('💳 Tarjeta').row()
+  .text('📝 Últimas').text('🔄 Cuotas').row()
+  .text('💵 Flujo').text('🗑 Borrar').row()
+  .text('❓ Ayuda')
+  .resized().persistent();
+
+// Mapeo botón del menú → nombre de comando
+const MENU_MAP = {
+  '📋 Registrar':  'registrar_fijos',
+  '💰 Balance':    'balance',
+  '📊 Resumen':    'resumen',
+  '💳 Tarjeta':    'tarjeta',
+  '📝 Últimas':    'ultimas',
+  '🔄 Cuotas':     'cuotas',
+  '💵 Flujo':      'flujo',
+  '🗑 Borrar':     'borrar',
+  '❓ Ayuda':      'start',
+};
 
 // Fecha actual en Buenos Aires
 function getNowBA() {
@@ -232,28 +254,23 @@ bot.use((ctx, next) => {
 // ============================================
 
 // /start
-bot.command('start', (ctx) => {
-  ctx.reply(
-    'PlataBot activo.\n\n' +
-    'Enviá un gasto como texto:\n' +
-    '• uber 3500\n' +
-    '• super 15000 compartido\n' +
-    '• 100 usd ahorro\n\n' +
-    'Comandos:\n' +
-    '/balance — Quién le debe a quién\n' +
-    '/resumen — Gastos del mes\n' +
-    '/flujo — Ingresos vs gastos vs sobrante\n' +
-    '/tarjeta — Gastos con tarjeta de crédito\n' +
-    '/gastosfijos — Estado de gastos fijos\n' +
-    '/registrar\\_fijos — Registrar gastos fijos del mes\n' +
-    '/ultimas — Últimas transacciones\n' +
-    '/borrar — Borrar una transacción\n' +
-    '/cuotas — Ver estado de compras en cuotas\n' +
+async function cmdStart(ctx) {
+  await ctx.reply(
+    '*PlataBot* 🤖\n\n' +
+    'Para registrar un gasto, escribilo directamente:\n' +
+    '• _uber 3500_\n' +
+    '• _super 15000 compartido_\n' +
+    '• _100 usd ahorro_\n\n' +
+    'Para todo lo demás, usá el menú 👇\n\n' +
+    '_Comandos adicionales:_\n' +
     '/cotizacion — Registrar ingresos del mes\n' +
     '/ingreso — Registrar ingreso extra\n' +
-    '/ping — Verificar conexión'
+    '/gastosfijos — Estado de gastos fijos\n' +
+    '/ping — Verificar conexión',
+    { parse_mode: 'Markdown', reply_markup: mainMenu }
   );
-});
+}
+bot.command('start', cmdStart);
 
 // /ping
 bot.command('ping', async (ctx) => {
@@ -267,7 +284,7 @@ bot.command('ping', async (ctx) => {
 });
 
 // /balance — balance compartido del mes actual
-bot.command('balance', async (ctx) => {
+async function cmdBalance(ctx) {
   try {
     const { month, year } = getNowBA();
     const data = await getBalance();
@@ -292,10 +309,11 @@ bot.command('balance', async (ctx) => {
     console.error('Error en /balance:', error.message);
     ctx.reply('Error consultando el balance. Revisá los logs.');
   }
-});
+}
+bot.command('balance', cmdBalance);
 
 // /resumen [mes] — resumen de gastos del mes
-bot.command('resumen', async (ctx) => {
+async function cmdResumen(ctx) {
   try {
     const arg = ctx.match;
     const { month, year } = parseMonth(arg);
@@ -344,10 +362,11 @@ bot.command('resumen', async (ctx) => {
     console.error('Error en /resumen:', error.message);
     ctx.reply('Error consultando el resumen. Revisá los logs.');
   }
-});
+}
+bot.command('resumen', cmdResumen);
 
 // /gastosfijos — estado de gastos fijos del mes actual
-bot.command('gastosfijos', async (ctx) => {
+async function cmdGastosFijos(ctx) {
   try {
     const { month, year } = getNowBA();
     const gastos = await getGastosFijos();
@@ -373,10 +392,11 @@ bot.command('gastosfijos', async (ctx) => {
     console.error('Error en /gastosfijos:', error.message);
     ctx.reply('Error consultando gastos fijos. Revisá los logs.');
   }
-});
+}
+bot.command('gastosfijos', cmdGastosFijos);
 
 // /ultimas [n] — ultimas N transacciones
-bot.command('ultimas', async (ctx) => {
+async function cmdUltimas(ctx) {
   try {
     let n = parseInt(ctx.match) || 5;
     if (n < 1) n = 5;
@@ -402,10 +422,11 @@ bot.command('ultimas', async (ctx) => {
     console.error('Error en /ultimas:', error.message);
     ctx.reply('Error consultando transacciones. Revisá los logs.');
   }
-});
+}
+bot.command('ultimas', cmdUltimas);
 
 // /tarjeta [mes] — resumen de gastos con tarjeta de crédito
-bot.command('tarjeta', async (ctx) => {
+async function cmdTarjeta(ctx) {
   try {
     const arg = ctx.match;
     const { month, year } = parseMonth(arg);
@@ -459,10 +480,11 @@ bot.command('tarjeta', async (ctx) => {
     console.error('Error en /tarjeta:', error.message);
     ctx.reply('Error consultando gastos de tarjeta. Revisá los logs.');
   }
-});
+}
+bot.command('tarjeta', cmdTarjeta);
 
 // /flujo [mes] — flujo financiero: ingresos vs gastos vs sobrante
-bot.command('flujo', async (ctx) => {
+async function cmdFlujo(ctx) {
   try {
     const arg = ctx.match;
     const { month, year } = parseMonth(arg);
@@ -507,10 +529,11 @@ bot.command('flujo', async (ctx) => {
     console.error('Error en /flujo:', error.message);
     ctx.reply('Error consultando el flujo. Revisá los logs.');
   }
-});
+}
+bot.command('flujo', cmdFlujo);
 
 // /registrar_fijos — registra todos los gastos fijos pendientes del mes
-bot.command('registrar_fijos', async (ctx) => {
+async function cmdRegistrarFijos(ctx) {
   try {
     const { month, year } = getNowBA();
     const [gastos, cuotas] = await Promise.all([getGastosFijos(), getCuotas()]);
@@ -547,10 +570,11 @@ bot.command('registrar_fijos', async (ctx) => {
     console.error('Error en /registrar_fijos:', error.message);
     ctx.reply('Error consultando gastos fijos. Revisá los logs.');
   }
-});
+}
+bot.command('registrar_fijos', cmdRegistrarFijos);
 
 // /cuotas — muestra estado de todas las cuotas
-bot.command('cuotas', async (ctx) => {
+async function cmdCuotas(ctx) {
   try {
     const allCuotas = await getCuotas();
 
@@ -587,10 +611,11 @@ bot.command('cuotas', async (ctx) => {
     console.error('Error en /cuotas:', error.message);
     ctx.reply('Error consultando cuotas. Revisá los logs.');
   }
-});
+}
+bot.command('cuotas', cmdCuotas);
 
 // /borrar — muestra ultimas transacciones para elegir cual borrar
-bot.command('borrar', async (ctx) => {
+async function cmdBorrar(ctx) {
   try {
     const transactions = await getLastTransactions(5);
 
@@ -625,7 +650,21 @@ bot.command('borrar', async (ctx) => {
     console.error('Error en /borrar:', error.message);
     ctx.reply('Error consultando transacciones. Revisá los logs.');
   }
-});
+}
+bot.command('borrar', cmdBorrar);
+
+// Mapa de handlers para el menú persistente
+const CMD_HANDLERS = {
+  start: cmdStart,
+  balance: cmdBalance,
+  resumen: cmdResumen,
+  tarjeta: cmdTarjeta,
+  ultimas: cmdUltimas,
+  cuotas: cmdCuotas,
+  flujo: cmdFlujo,
+  registrar_fijos: cmdRegistrarFijos,
+  borrar: cmdBorrar,
+};
 
 // /ingreso [monto] [descripcion] — registrar ingreso extra
 bot.command('ingreso', async (ctx) => {
@@ -821,6 +860,14 @@ bot.command('cotizacion', async (ctx) => {
 
 bot.on('message:text', async (ctx) => {
   try {
+    const text = ctx.message.text.trim();
+
+    // Menú persistente: si el texto coincide con un botón, ejecutar el comando
+    const menuCmd = MENU_MAP[text];
+    if (menuCmd && CMD_HANDLERS[menuCmd]) {
+      return CMD_HANDLERS[menuCmd](ctx);
+    }
+
     // Interceptar si el usuario está ajustando monto de cuota (con interés)
     const cuotaEdit = [...pendingCuotaEdit.entries()].find(
       ([_, v]) => v.userId === ctx.from.id && v.waitingForAmount && Date.now() - v.createdAt < TX_TTL
@@ -914,7 +961,8 @@ bot.on('message:text', async (ctx) => {
       return ctx.reply(
         'No pude interpretar ese mensaje.\n\n' +
         'Enviá algo como: uber 3500\n' +
-        'O: super 15000 compartido'
+        'O: super 15000 compartido',
+        { reply_markup: mainMenu }
       );
     }
 
