@@ -1335,8 +1335,18 @@ function buildTxFromAi(aiResult, senderId) {
     if (mp.includes('efectivo')) metodoPago = 'Efectivo';
     else if (mp.includes('deel') && mp.includes('usd')) metodoPago = 'Deel USD';
     else if (mp.includes('deel')) metodoPago = 'Deel Card';
-    else if (mp.includes('tarjeta') || mp.includes('credito') || mp.includes('crédito')) metodoPago = 'Tarjeta';
     else if (mp.includes('banco') || mp.includes('debito') || mp.includes('débito') || mp.includes('transferencia')) metodoPago = 'Banco';
+    else if (mp.includes('tarjeta') || mp.includes('credito') || mp.includes('crédito') || mp.includes('visa') || mp.includes('master')) {
+      // Intentar resolver a tarjeta específica si la IA dijo marca (visa/master)
+      const userCards = config.tarjetas[senderId] || [];
+      const brand = mp.includes('visa') ? 'visa' : mp.includes('master') ? 'master' : null;
+      if (brand) {
+        const matches = userCards.filter(c => c.toLowerCase().includes(brand));
+        metodoPago = matches.length === 1 ? matches[0] : 'Tarjeta';
+      } else {
+        metodoPago = 'Tarjeta';
+      }
+    }
     else metodoPago = null; // no reconocido, preguntar
   }
 
@@ -1572,14 +1582,15 @@ bot.on('message:text', async (ctx) => {
     }
 
     // Interceptar si el usuario tiene una tx de audio/foto esperando método de pago
+    // metodoPago null = preguntó "¿Con qué pagaste?", 'Tarjeta' = preguntó "Elegí tarjeta"
     const pendingPayment = [...pendingTx.entries()].find(
-      ([_, v]) => v.userId === ctx.from.id && v.metodoPago === null && Date.now() - v.createdAt < TX_TTL
+      ([_, v]) => v.userId === ctx.from.id && (v.metodoPago === null || v.metodoPago === 'Tarjeta') && Date.now() - v.createdAt < TX_TTL
     );
     if (pendingPayment) {
       const [txId, tx] = pendingPayment;
       const lower = text.toLowerCase();
 
-      // Primero intentar matchear tarjeta específica del usuario (ej: "visa bbva")
+      // Matchear tarjeta específica del usuario (nombre completo: "visa bbva")
       const userCards = config.tarjetas[ctx.from.id] || [];
       let matchedCard = null;
       for (const card of userCards) {
@@ -1587,6 +1598,15 @@ bot.on('message:text', async (ctx) => {
         if (cardParts.every(part => lower.includes(part))) {
           matchedCard = card;
           break;
+        }
+      }
+
+      // Matchear por marca parcial: "visa" → Visa BBVA si es la única visa del usuario
+      if (!matchedCard) {
+        const brand = lower.includes('visa') ? 'visa' : lower.includes('master') ? 'master' : null;
+        if (brand) {
+          const matches = userCards.filter(c => c.toLowerCase().includes(brand));
+          if (matches.length === 1) matchedCard = matches[0];
         }
       }
 
@@ -1633,7 +1653,15 @@ bot.on('message:text', async (ctx) => {
         );
       }
 
-      // Matchear método de pago general
+      // Si ya estaba en fase "elegí tarjeta" y no matcheó nombre → recordar
+      if (tx.metodoPago === 'Tarjeta') {
+        return ctx.reply(
+          '💳 No pude identificar la tarjeta.\n\nUsá los botones de arriba o escribí el nombre (ej: *visa bbva*).',
+          { parse_mode: 'Markdown' }
+        );
+      }
+
+      // Matchear método de pago general (solo si metodoPago era null)
       let matchedMethod = null;
       if (lower.includes('efectivo')) matchedMethod = 'Efectivo';
       else if (lower.includes('banco') || lower.includes('transferencia') || lower.includes('debito') || lower.includes('débito')) matchedMethod = 'Banco';
