@@ -640,8 +640,40 @@ Streamlit Community Cloud:
 
 ---
 
+## Audio y fotos (Fase 9)
+
+Soporte para registrar gastos por nota de voz y foto de recibo. Usa OpenAI (Whisper + GPT-4o-mini).
+
+### Configuración
+
+Variable de entorno: `OPENAI_API_KEY` (opcional — si no está, el bot responde que no está habilitado).
+
+### Audio (notas de voz)
+
+- Handler: `bot.on('message:voice')` en `index.js`
+- Flujo: descargar OGG de Telegram → transcribir con Whisper (español) → `wordsToNumber()` → `parseTransaction()` → preview normal
+- `wordsToNumber()` en `parser.js`: convierte "tres mil quinientos" → "3500", "veinticinco mil" → "25000"
+- Costo: ~US$0.006/minuto
+
+### Fotos de recibos
+
+- Handler: `bot.on('message:photo')` en `index.js`
+- Flujo: obtener URL temporal de Telegram → GPT-4o-mini vision → extraer JSON {descripcion, monto, metodoPago} → preview con botón Compartido toggle
+- Prompt del sistema define formato JSON estricto
+- Costo: ~US$0.0005/foto
+
+### Archivos
+
+- `bot/src/ai.js` — Módulo OpenAI: `transcribeAudio(buffer)`, `analyzeReceipt(imageUrl)`, `isConfigured()`
+- `bot/src/parser.js` — Agregada función `wordsToNumber(text)`
+- `bot/src/config.js` — Agregada `openaiApiKey`
+- `bot/src/index.js` — Handlers `message:voice`, `message:photo`, callback `photo_shared`
+
+---
+
 ## Próximos pasos al retomar
 
 - **Fase 7: Refinamiento** — En progreso. Ya implementados: `/tarjeta`, `/registrar_fijos`, recordatorio gastos fijos, tarjetas de crédito específicas, cuotas de tarjeta, rangos expandidos, parsing locale, filtros robustos, auto-fijos diario, alertas de presupuesto, resumen semanal
 - **Fase 8: Dashboard Streamlit** — Funcionando en Streamlit Community Cloud con viewer auth
+- **Fase 9: Audio y fotos** — Implementado. Requiere OPENAI_API_KEY en Railway
 - Ideas pendientes: export, más ideas del usuario

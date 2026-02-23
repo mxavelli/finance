@@ -16,6 +16,9 @@ for (const key of required) {
   }
 }
 
+// OpenAI es opcional — si no hay key, audio/fotos no se habilitan
+const openaiApiKey = process.env.OPENAI_API_KEY || null;
+
 module.exports = {
   botToken: process.env.BOT_TOKEN,
   sheetId: process.env.GOOGLE_SHEET_ID,
@@ -47,4 +50,5 @@ module.exports = {
     'Visa BBVA': parseInt(process.env.CIERRE_BBVA) || 0,
     'Master BBVA': parseInt(process.env.CIERRE_BBVA) || 0,
   },
+  openaiApiKey,
 };

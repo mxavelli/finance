@@ -14,8 +14,9 @@ const {
   registrarPagoTC, registrarOtrosIngresos,
 } = require('./sheets');
 const { getCategories } = require('./categories');
-const { parseTransaction, formatAmount } = require('./parser');
+const { parseTransaction, formatAmount, wordsToNumber } = require('./parser');
 const { startScheduler } = require('./scheduler');
+const { transcribeAudio, analyzeReceipt, isConfigured: isAiConfigured } = require('./ai');
 
 const bot = new Bot(config.botToken);
 
@@ -1300,6 +1301,225 @@ bot.command('cotizacion', async (ctx) => {
 });
 
 // ============================================
+// AUDIO — transcribir y parsear como transaccion
+// ============================================
+
+bot.on('message:voice', async (ctx) => {
+  try {
+    if (!isAiConfigured()) {
+      return ctx.reply('Audio no disponible. Falta configurar OPENAI_API_KEY.');
+    }
+
+    const statusMsg = await ctx.reply('🎙️ Transcribiendo audio...');
+
+    // Descargar el archivo de audio de Telegram
+    const file = await ctx.api.getFile(ctx.message.voice.file_id);
+    const fileUrl = `https://api.telegram.org/file/bot${config.botToken}/${file.file_path}`;
+    const response = await fetch(fileUrl);
+    const buffer = Buffer.from(await response.arrayBuffer());
+
+    // Transcribir con Whisper
+    const transcription = await transcribeAudio(buffer);
+    if (!transcription || !transcription.trim()) {
+      return ctx.reply('No pude entender el audio. Intentá de nuevo o escribí el gasto.');
+    }
+
+    // Convertir palabras numéricas a dígitos y mostrar transcripción
+    const processed = wordsToNumber(transcription);
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `🎙️ Entendí: _${processed}_`, { parse_mode: 'Markdown' });
+
+    // Parsear como transacción
+    const categories = await getCategories();
+    const tx = parseTransaction(processed, ctx.from.id, categories, config);
+
+    if (!tx) {
+      return ctx.reply(
+        'No pude interpretar el audio como gasto.\n\n' +
+        'Intentá decir algo como: "uber tres mil quinientos banco"',
+        { reply_markup: mainMenu }
+      );
+    }
+
+    cleanMap(pendingTx);
+    const txId = ++txCounter;
+
+    // Flujo con cuotas
+    if (tx.cuotas) {
+      const montoCuota = Math.round(tx.monto / tx.cuotas);
+      pendingTx.set(txId, { ...tx, montoCuota, userId: ctx.from.id, createdAt: Date.now() });
+
+      const preview =
+        `*Nueva compra en cuotas* 🎙️\n\n` +
+        `📅 ${tx.fecha}\n` +
+        `📋 ${tx.descripcion}\n` +
+        `🏷️ ${tx.categoria}\n` +
+        `💰 ${formatAmount(tx.monto, tx.moneda)} → ${tx.cuotas} cuotas de ${formatAmount(montoCuota, tx.moneda)}\n` +
+        `👤 ${tx.tipo}\n` +
+        `🙋 Pagado por: ${tx.pagadoPor}` +
+        (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '') +
+        `\n\n💳 Elegí tarjeta:`;
+
+      const userCards = config.tarjetas[ctx.from.id] || [];
+      const keyboard = new InlineKeyboard();
+      for (let i = 0; i < userCards.length; i++) {
+        keyboard.text(`💳 ${userCards[i]}`, `cuota_card_${i}_${txId}`);
+        if (i % 2 === 1) keyboard.row();
+      }
+      if (userCards.length % 2 === 1) keyboard.row();
+      keyboard.text('❌ Cancelar', `tx_no:${txId}`);
+
+      return ctx.reply(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
+    }
+
+    // Flujo normal
+    pendingTx.set(txId, { ...tx, userId: ctx.from.id, createdAt: Date.now() });
+
+    const preview =
+      `*Nueva transacción* 🎙️\n\n` +
+      `📅 ${tx.fecha} ${tx.hora}\n` +
+      `📋 ${tx.descripcion}\n` +
+      `🏷️ ${tx.categoria}\n` +
+      `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+      `💳 ${tx.metodoPago === 'Tarjeta' ? 'Elegí tarjeta ↓' : tx.metodoPago}\n` +
+      `👤 ${tx.tipo}\n` +
+      `🙋 Pagado por: ${tx.pagadoPor}` +
+      (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '');
+
+    let keyboard;
+    if (tx.metodoPago === 'Tarjeta') {
+      const userCards = config.tarjetas[ctx.from.id] || [];
+      keyboard = new InlineKeyboard();
+      for (let i = 0; i < userCards.length; i++) {
+        keyboard.text(`💳 ${userCards[i]}`, `card_${i}_${txId}`);
+        if (i % 2 === 1) keyboard.row();
+      }
+      if (userCards.length % 2 === 1) keyboard.row();
+      keyboard.text('❌ Cancelar', `tx_no:${txId}`);
+    } else {
+      keyboard = new InlineKeyboard()
+        .text('✅ Confirmar', `tx_ok:${txId}`)
+        .text('❌ Cancelar', `tx_no:${txId}`);
+    }
+
+    await ctx.reply(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
+  } catch (error) {
+    console.error('Error procesando audio:', error.message);
+    ctx.reply('Error procesando el audio. Revisá los logs.');
+  }
+});
+
+// ============================================
+// FOTO — analizar recibo y parsear como transaccion
+// ============================================
+
+bot.on('message:photo', async (ctx) => {
+  try {
+    if (!isAiConfigured()) {
+      return ctx.reply('Fotos no disponible. Falta configurar OPENAI_API_KEY.');
+    }
+
+    const statusMsg = await ctx.reply('📷 Analizando recibo...');
+
+    // Tomar la foto de mayor resolución (última del array)
+    const photos = ctx.message.photo;
+    const photo = photos[photos.length - 1];
+    const file = await ctx.api.getFile(photo.file_id);
+    const fileUrl = `https://api.telegram.org/file/bot${config.botToken}/${file.file_path}`;
+
+    // Analizar con GPT-4o-mini vision
+    const result = await analyzeReceipt(fileUrl);
+
+    if (result.error) {
+      return ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `📷 ${result.error}`);
+    }
+
+    if (!result.monto || result.monto <= 0) {
+      return ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, '📷 No pude detectar el monto del recibo.');
+    }
+
+    // Determinar categoría usando el parser con la descripción extraída
+    const categories = await getCategories();
+    let categoria = 'Otros';
+    const testTx = parseTransaction(`${result.descripcion} ${result.monto}`, ctx.from.id, categories, config);
+    if (testTx) {
+      categoria = testTx.categoria;
+    }
+
+    // Determinar método de pago
+    let metodoPago = 'Banco';
+    if (result.metodoPago) {
+      const mp = result.metodoPago.toLowerCase();
+      if (mp.includes('efectivo')) metodoPago = 'Efectivo';
+      else if (mp.includes('tarjeta') || mp.includes('credito') || mp.includes('crédito')) metodoPago = 'Tarjeta';
+      else if (mp.includes('debito') || mp.includes('débito') || mp.includes('banco')) metodoPago = 'Banco';
+    }
+
+    // Determinar tipo (default: individual del usuario)
+    const pagadoPor = ctx.from.id === config.orianaId ? 'Oriana' : 'Moises';
+    const tipo = ctx.from.id === config.orianaId ? 'Individual Oriana' : 'Individual Moises';
+
+    // Armar fecha/hora
+    const now = new Date();
+    const baOptions = { timeZone: 'America/Argentina/Buenos_Aires' };
+    const fecha = now.toLocaleDateString('es-AR', { ...baOptions, day: '2-digit', month: '2-digit', year: 'numeric' });
+    const hora = now.toLocaleTimeString('es-AR', { ...baOptions, hour: '2-digit', minute: '2-digit', hour12: false });
+
+    const descripcion = result.descripcion.charAt(0).toUpperCase() + result.descripcion.slice(1);
+
+    const tx = {
+      fecha, hora, descripcion, categoria,
+      monto: result.monto,
+      moneda: 'ARS',
+      metodoPago, tipo, pagadoPor,
+      splitMoises: tipo === 'Individual Oriana' ? 0 : 100,
+      splitOriana: tipo === 'Individual Oriana' ? 100 : 0,
+      notas: result.notas || '',
+      cuotas: null,
+    };
+
+    cleanMap(pendingTx);
+    const txId = ++txCounter;
+    pendingTx.set(txId, { ...tx, userId: ctx.from.id, createdAt: Date.now() });
+
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `📷 Recibo detectado: _${descripcion}_`, { parse_mode: 'Markdown' });
+
+    const preview =
+      `*Nueva transacción* 📷\n\n` +
+      `📅 ${tx.fecha} ${tx.hora}\n` +
+      `📋 ${tx.descripcion}\n` +
+      `🏷️ ${tx.categoria}\n` +
+      `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+      `💳 ${tx.metodoPago === 'Tarjeta' ? 'Elegí tarjeta ↓' : tx.metodoPago}\n` +
+      `👤 ${tx.tipo}\n` +
+      `🙋 Pagado por: ${tx.pagadoPor}`;
+
+    let keyboard;
+    if (tx.metodoPago === 'Tarjeta') {
+      const userCards = config.tarjetas[ctx.from.id] || [];
+      keyboard = new InlineKeyboard();
+      for (let i = 0; i < userCards.length; i++) {
+        keyboard.text(`💳 ${userCards[i]}`, `card_${i}_${txId}`);
+        if (i % 2 === 1) keyboard.row();
+      }
+      if (userCards.length % 2 === 1) keyboard.row();
+      keyboard.text('🔄 Compartido', `photo_shared:${txId}`).row();
+      keyboard.text('❌ Cancelar', `tx_no:${txId}`);
+    } else {
+      keyboard = new InlineKeyboard()
+        .text('✅ Confirmar', `tx_ok:${txId}`)
+        .text('🔄 Compartido', `photo_shared:${txId}`)
+        .row()
+        .text('❌ Cancelar', `tx_no:${txId}`);
+    }
+
+    await ctx.reply(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
+  } catch (error) {
+    console.error('Error procesando foto:', error.message);
+    ctx.reply('Error procesando la foto. Revisá los logs.');
+  }
+});
+
+// ============================================
 // MENSAJE DE TEXTO — parsear como transaccion
 // ============================================
 
@@ -1777,6 +1997,61 @@ bot.callbackQuery(/^tx_no:(\d+)$/, async (ctx) => {
   pendingTx.delete(txId);
   await ctx.editMessageText('❌ Transacción cancelada.');
   await ctx.answerCallbackQuery({ text: 'Cancelada' });
+});
+
+// Toggle compartido en transacciones de foto
+bot.callbackQuery(/^photo_shared:(\d+)$/, async (ctx) => {
+  const txId = parseInt(ctx.match[1]);
+  const tx = pendingTx.get(txId);
+
+  if (!tx) return ctx.answerCallbackQuery({ text: 'Transacción expirada.' });
+  if (ctx.from.id !== tx.userId) return ctx.answerCallbackQuery({ text: 'Solo quien registró puede modificar.' });
+
+  // Toggle entre compartido e individual
+  if (tx.tipo === 'Compartido') {
+    tx.tipo = tx.pagadoPor === 'Oriana' ? 'Individual Oriana' : 'Individual Moises';
+    tx.splitMoises = tx.pagadoPor === 'Oriana' ? 0 : 100;
+    tx.splitOriana = tx.pagadoPor === 'Oriana' ? 100 : 0;
+  } else {
+    tx.tipo = 'Compartido';
+    tx.splitMoises = 50;
+    tx.splitOriana = 50;
+  }
+
+  const preview =
+    `*Nueva transacción* 📷\n\n` +
+    `📅 ${tx.fecha} ${tx.hora}\n` +
+    `📋 ${tx.descripcion}\n` +
+    `🏷️ ${tx.categoria}\n` +
+    `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+    `💳 ${tx.metodoPago === 'Tarjeta' ? 'Elegí tarjeta ↓' : tx.metodoPago}\n` +
+    `👤 ${tx.tipo}\n` +
+    `🙋 Pagado por: ${tx.pagadoPor}` +
+    (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '');
+
+  const toggleLabel = tx.tipo === 'Compartido' ? '👤 Individual' : '🔄 Compartido';
+
+  let keyboard;
+  if (tx.metodoPago === 'Tarjeta') {
+    const userCards = config.tarjetas[ctx.from.id] || [];
+    keyboard = new InlineKeyboard();
+    for (let i = 0; i < userCards.length; i++) {
+      keyboard.text(`💳 ${userCards[i]}`, `card_${i}_${txId}`);
+      if (i % 2 === 1) keyboard.row();
+    }
+    if (userCards.length % 2 === 1) keyboard.row();
+    keyboard.text(toggleLabel, `photo_shared:${txId}`).row();
+    keyboard.text('❌ Cancelar', `tx_no:${txId}`);
+  } else {
+    keyboard = new InlineKeyboard()
+      .text('✅ Confirmar', `tx_ok:${txId}`)
+      .text(toggleLabel, `photo_shared:${txId}`)
+      .row()
+      .text('❌ Cancelar', `tx_no:${txId}`);
+  }
+
+  await ctx.editMessageText(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
+  await ctx.answerCallbackQuery({ text: tx.tipo });
 });
 
 // ============================================

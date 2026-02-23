@@ -43,6 +43,43 @@ Enviale un mensaje de texto al bot con el gasto. No hace falta formato especific
 
 ---
 
+## Registrar por audio
+
+Pueden enviar una nota de voz al bot describiendo el gasto. El bot transcribe el audio y lo parsea igual que un mensaje de texto.
+
+**Ejemplos de que decir:**
+
+- "uber tres mil quinientos banco"
+- "super quince mil compartido"
+- "cafe mil doscientos efectivo"
+
+### Como funciona
+
+1. Mantene el boton de audio y decí el gasto
+2. El bot muestra "Transcribiendo audio..." y luego "Entendí: ..."
+3. Aparece el preview normal con botones para confirmar/cancelar
+4. Si es tarjeta, te pregunta cual igual que siempre
+
+**Tip:** Pueden decir los numeros en palabras ("tres mil quinientos") o como numeros ("3500"), ambos funcionan.
+
+---
+
+## Registrar por foto de recibo
+
+Pueden enviar una foto de un ticket o factura y el bot extrae los datos automaticamente.
+
+### Como funciona
+
+1. Sacale foto al ticket y enviala al bot
+2. El bot muestra "Analizando recibo..." y luego los datos que detecto
+3. Aparece el preview con descripcion, monto y metodo de pago
+4. Si quieren marcarlo como compartido, tocan **Compartido** (se puede cambiar de ida y vuelta)
+5. Confirman o cancelan
+
+**Nota:** La foto tiene que ser legible. Si el ticket esta muy borroso o cortado, el bot va a avisar que no pudo leerlo.
+
+---
+
 ## Comandos disponibles
 
 ### /balance
