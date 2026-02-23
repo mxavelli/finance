@@ -1571,6 +1571,122 @@ bot.on('message:text', async (ctx) => {
       return CMD_HANDLERS[menuCmd](ctx);
     }
 
+    // Interceptar si el usuario tiene una tx de audio/foto esperando método de pago
+    const pendingPayment = [...pendingTx.entries()].find(
+      ([_, v]) => v.userId === ctx.from.id && v.metodoPago === null && Date.now() - v.createdAt < TX_TTL
+    );
+    if (pendingPayment) {
+      const [txId, tx] = pendingPayment;
+      const lower = text.toLowerCase();
+
+      // Primero intentar matchear tarjeta específica del usuario (ej: "visa bbva")
+      const userCards = config.tarjetas[ctx.from.id] || [];
+      let matchedCard = null;
+      for (const card of userCards) {
+        const cardParts = card.toLowerCase().split(' ');
+        if (cardParts.every(part => lower.includes(part))) {
+          matchedCard = card;
+          break;
+        }
+      }
+
+      if (matchedCard) {
+        tx.metodoPago = matchedCard;
+
+        // Si tiene cuotas → flujo cuotas
+        if (tx.cuotas) {
+          const now = getNowBA();
+          const cierreDay = config.cierreTarjetas[matchedCard] || 0;
+          const primera = calcPrimeraCuota(now, cierreDay);
+          const primeraCuotaStr = formatMesAnio(primera.month, primera.year);
+          const montoCuota = tx.montoCuota || Math.round(tx.monto / tx.cuotas);
+
+          pendingTx.delete(txId);
+          await appendCuota({
+            descripcion: tx.descripcion, categoria: tx.categoria,
+            montoTotal: tx.monto, cuotas: tx.cuotas, montoCuota,
+            tarjeta: matchedCard, tipo: tx.tipo, pagadoPor: tx.pagadoPor,
+            primeraCuota: primeraCuotaStr, moneda: tx.moneda,
+          });
+          checkBudgetAlert(ctx.from.id, tx);
+          return ctx.reply(
+            `✅ *Cuotas registradas*\n\n` +
+            `📋 ${tx.descripcion}\n` +
+            `💰 ${formatAmount(tx.monto, tx.moneda)} → ${tx.cuotas} cuotas de ${formatAmount(montoCuota, tx.moneda)}\n` +
+            `💳 ${matchedCard}\n` +
+            `📅 Primera cuota: ${primeraCuotaStr}`,
+            { parse_mode: 'Markdown' }
+          );
+        }
+
+        // Sin cuotas → confirmar directo
+        pendingTx.delete(txId);
+        await appendTransaction(tx);
+        checkBudgetAlert(ctx.from.id, tx);
+        return ctx.reply(
+          `✅ *Guardada*\n\n` +
+          `📋 ${tx.descripcion}\n` +
+          `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+          `🏷️ ${tx.categoria}\n` +
+          `💳 ${matchedCard}`,
+          { parse_mode: 'Markdown' }
+        );
+      }
+
+      // Matchear método de pago general
+      let matchedMethod = null;
+      if (lower.includes('efectivo')) matchedMethod = 'Efectivo';
+      else if (lower.includes('banco') || lower.includes('transferencia') || lower.includes('debito') || lower.includes('débito')) matchedMethod = 'Banco';
+      else if (lower.includes('deel') && lower.includes('usd')) matchedMethod = 'Deel USD';
+      else if (lower.includes('deel')) matchedMethod = 'Deel Card';
+      else if (lower.includes('tarjeta') || lower.includes('credito') || lower.includes('crédito')) matchedMethod = 'Tarjeta';
+
+      if (matchedMethod === 'Tarjeta') {
+        tx.metodoPago = 'Tarjeta';
+        const keyboard = new InlineKeyboard();
+        for (let i = 0; i < userCards.length; i++) {
+          keyboard.text(`💳 ${userCards[i]}`, `card_${i}_${txId}`);
+          if (i % 2 === 1) keyboard.row();
+        }
+        if (userCards.length % 2 === 1) keyboard.row();
+        keyboard.text('❌ Cancelar', `tx_no:${txId}`);
+
+        return ctx.reply(
+          `*Nueva transacción*\n\n` +
+          `📅 ${tx.fecha} ${tx.hora}\n` +
+          `📋 ${tx.descripcion}\n` +
+          `🏷️ ${tx.categoria}\n` +
+          `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+          `👤 ${tx.tipo}\n` +
+          `🙋 Pagado por: ${tx.pagadoPor}` +
+          (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '') +
+          `\n\n💳 Elegí tarjeta:`,
+          { parse_mode: 'Markdown', reply_markup: keyboard }
+        );
+      }
+
+      if (matchedMethod) {
+        tx.metodoPago = matchedMethod;
+        pendingTx.delete(txId);
+        await appendTransaction(tx);
+        checkBudgetAlert(ctx.from.id, tx);
+        return ctx.reply(
+          `✅ *Guardada*\n\n` +
+          `📋 ${tx.descripcion}\n` +
+          `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+          `🏷️ ${tx.categoria}\n` +
+          `💳 ${matchedMethod}`,
+          { parse_mode: 'Markdown' }
+        );
+      }
+
+      // No se reconoció método → recordar usar botones
+      return ctx.reply(
+        '💳 No pude identificar el método de pago.\n\nUsá los botones de arriba o escribí: *tarjeta*, *banco*, *efectivo* o *deel*.',
+        { parse_mode: 'Markdown' }
+      );
+    }
+
     // Interceptar si el usuario está registrando compra/venta crypto
     const cryptoPending = pendingCrypto.get(ctx.from.id);
     if (cryptoPending && (cryptoPending.action === 'buy_waiting' || cryptoPending.action === 'sell_waiting')) {
