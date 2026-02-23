@@ -14,7 +14,7 @@ const {
   registrarPagoTC, registrarOtrosIngresos,
 } = require('./sheets');
 const { getCategories } = require('./categories');
-const { parseTransaction, formatAmount } = require('./parser');
+const { formatAmount } = require('./parser');
 const { startScheduler } = require('./scheduler');
 const { transcribeAudio, parseExpense, analyzeReceipt, isConfigured: isAiConfigured } = require('./ai');
 
@@ -1331,23 +1331,28 @@ function buildTxFromAi(aiResult, senderId) {
   // Método de pago: normalizar lo que diga la IA
   let metodoPago = aiResult.metodoPago || null;
   if (metodoPago) {
-    const mp = metodoPago.toLowerCase();
-    if (mp.includes('efectivo')) metodoPago = 'Efectivo';
-    else if (mp.includes('deel') && mp.includes('usd')) metodoPago = 'Deel USD';
-    else if (mp.includes('deel')) metodoPago = 'Deel Card';
-    else if (mp.includes('banco') || mp.includes('debito') || mp.includes('débito') || mp.includes('transferencia')) metodoPago = 'Banco';
-    else if (mp.includes('tarjeta') || mp.includes('credito') || mp.includes('crédito') || mp.includes('visa') || mp.includes('master')) {
-      // Intentar resolver a tarjeta específica si la IA dijo marca (visa/master)
-      const userCards = config.tarjetas[senderId] || [];
-      const brand = mp.includes('visa') ? 'visa' : mp.includes('master') ? 'master' : null;
-      if (brand) {
-        const matches = userCards.filter(c => c.toLowerCase().includes(brand));
-        metodoPago = matches.length === 1 ? matches[0] : 'Tarjeta';
-      } else {
-        metodoPago = 'Tarjeta';
+    // Si la IA devolvió un nombre exacto de tarjeta, usarlo directo
+    if (config.todasLasTarjetas.includes(metodoPago)) {
+      // OK, es nombre exacto
+    } else {
+      const mp = metodoPago.toLowerCase();
+      if (mp.includes('efectivo')) metodoPago = 'Efectivo';
+      else if (mp.includes('deel') && mp.includes('usd')) metodoPago = 'Deel USD';
+      else if (mp === 'deel card' || mp === 'deel') metodoPago = 'Deel Card';
+      else if (mp.includes('banco') || mp.includes('debito') || mp.includes('débito') || mp.includes('transferencia')) metodoPago = 'Banco';
+      else if (mp.includes('tarjeta') || mp.includes('credito') || mp.includes('crédito') || mp.includes('visa') || mp.includes('master')) {
+        // Intentar resolver a tarjeta específica por marca
+        const userCards = config.tarjetas[senderId] || [];
+        const brand = mp.includes('visa') ? 'visa' : mp.includes('master') ? 'master' : null;
+        if (brand) {
+          const matches = userCards.filter(c => c.toLowerCase().includes(brand));
+          metodoPago = matches.length === 1 ? matches[0] : 'Tarjeta';
+        } else {
+          metodoPago = 'Tarjeta';
+        }
       }
+      else metodoPago = null; // no reconocido, preguntar
     }
-    else metodoPago = null; // no reconocido, preguntar
   }
 
   const descripcion = aiResult.descripcion
@@ -1504,7 +1509,8 @@ bot.on('message:voice', async (ctx) => {
     // Parsear con IA
     const categories = await getCategories();
     const categoryNames = categories.map(c => c.name);
-    const aiResult = await parseExpense(transcription, categoryNames);
+    const userCardNames = config.tarjetas[ctx.from.id] || [];
+    const aiResult = await parseExpense(transcription, categoryNames, userCardNames);
 
     if (aiResult.error) {
       return ctx.reply(
@@ -1543,10 +1549,11 @@ bot.on('message:photo', async (ctx) => {
     const file = await ctx.api.getFile(photo.file_id);
     const fileUrl = `https://api.telegram.org/file/bot${config.botToken}/${file.file_path}`;
 
-    // Analizar con IA (incluye categorías dinámicas)
+    // Analizar con IA (incluye categorías y tarjetas del usuario)
     const categories = await getCategories();
     const categoryNames = categories.map(c => c.name);
-    const result = await analyzeReceipt(fileUrl, categoryNames);
+    const userCardNames = config.tarjetas[ctx.from.id] || [];
+    const result = await analyzeReceipt(fileUrl, categoryNames, userCardNames);
 
     if (result.error) {
       return ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `📷 ${result.error}`);
@@ -1918,10 +1925,18 @@ bot.on('message:text', async (ctx) => {
       pendingFixedEdit.delete(ctx.from.id);
     }
 
-    const categories = await getCategories();
-    const tx = parseTransaction(ctx.message.text, ctx.from.id, categories, config);
+    // IA unificada: texto, audio y fotos usan el mismo flujo
+    if (!isAiConfigured()) {
+      return ctx.reply('IA no configurada. Agregá OPENAI_API_KEY en las variables de entorno.');
+    }
 
-    if (!tx) {
+    const categories = await getCategories();
+    const categoryNames = categories.map(c => c.name);
+    const userCardNames = config.tarjetas[ctx.from.id] || [];
+
+    const aiResult = await parseExpense(text, categoryNames, userCardNames);
+
+    if (aiResult.error) {
       return ctx.reply(
         'No pude interpretar ese mensaje.\n\n' +
         'Enviá algo como: uber 3500\n' +
@@ -1930,68 +1945,12 @@ bot.on('message:text', async (ctx) => {
       );
     }
 
-    cleanMap(pendingTx);
-    const txId = ++txCounter;
-
-    // Flujo especial para compras en cuotas
-    if (tx.cuotas) {
-      const montoCuota = Math.round(tx.monto / tx.cuotas);
-      pendingTx.set(txId, { ...tx, montoCuota, userId: ctx.from.id, createdAt: Date.now() });
-
-      const preview =
-        `*Nueva compra en cuotas*\n\n` +
-        `📅 ${tx.fecha}\n` +
-        `📋 ${tx.descripcion}\n` +
-        `🏷️ ${tx.categoria}\n` +
-        `💰 ${formatAmount(tx.monto, tx.moneda)} → ${tx.cuotas} cuotas de ${formatAmount(montoCuota, tx.moneda)}\n` +
-        `👤 ${tx.tipo}\n` +
-        `🙋 Pagado por: ${tx.pagadoPor}` +
-        (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '') +
-        `\n\n💳 Elegí tarjeta:`;
-
-      const userCards = config.tarjetas[ctx.from.id] || [];
-      const keyboard = new InlineKeyboard();
-      for (let i = 0; i < userCards.length; i++) {
-        keyboard.text(`💳 ${userCards[i]}`, `cuota_card_${i}_${txId}`);
-        if (i % 2 === 1) keyboard.row();
-      }
-      if (userCards.length % 2 === 1) keyboard.row();
-      keyboard.text('❌ Cancelar', `tx_no:${txId}`);
-
-      return ctx.reply(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
+    if (!aiResult.monto || aiResult.monto <= 0) {
+      return ctx.reply('No encontré un monto válido en el mensaje.', { reply_markup: mainMenu });
     }
 
-    // Flujo normal (sin cuotas)
-    pendingTx.set(txId, { ...tx, userId: ctx.from.id, createdAt: Date.now() });
-
-    const preview =
-      `*Nueva transacción*\n\n` +
-      `📅 ${tx.fecha} ${tx.hora}\n` +
-      `📋 ${tx.descripcion}\n` +
-      `🏷️ ${tx.categoria}\n` +
-      `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
-      `💳 ${tx.metodoPago === 'Tarjeta' ? 'Elegí tarjeta ↓' : tx.metodoPago}\n` +
-      `👤 ${tx.tipo}\n` +
-      `🙋 Pagado por: ${tx.pagadoPor}` +
-      (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '');
-
-    let keyboard;
-    if (tx.metodoPago === 'Tarjeta') {
-      const userCards = config.tarjetas[ctx.from.id] || [];
-      keyboard = new InlineKeyboard();
-      for (let i = 0; i < userCards.length; i++) {
-        keyboard.text(`💳 ${userCards[i]}`, `card_${i}_${txId}`);
-        if (i % 2 === 1) keyboard.row();
-      }
-      if (userCards.length % 2 === 1) keyboard.row();
-      keyboard.text('❌ Cancelar', `tx_no:${txId}`);
-    } else {
-      keyboard = new InlineKeyboard()
-        .text('✅ Confirmar', `tx_ok:${txId}`)
-        .text('❌ Cancelar', `tx_no:${txId}`);
-    }
-
-    await ctx.reply(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
+    const tx = buildTxFromAi(aiResult, ctx.from.id);
+    await showAiTxPreview(ctx, tx, '💬');
   } catch (error) {
     console.error('Error procesando mensaje:', error.message);
     ctx.reply('Error procesando el mensaje. Revisá los logs.');

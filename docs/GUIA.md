@@ -6,35 +6,40 @@
 
 ## Registrar un gasto
 
-Enviale un mensaje de texto al bot con el gasto. No hace falta formato especifico.
+Enviale un mensaje de texto al bot con el gasto. El bot usa IA para entender lo que escribas — no hace falta formato especifico.
 
 **Ejemplos:**
 
 | Mensaje | Que registra |
 |---------|-------------|
-| `uber 3500` | Transporte, $3.500 ARS, [elige tarjeta], Individual |
-| `super 15000 compartido` | Alimentacion, $15.000 ARS, [elige tarjeta], Compartido 50/50 |
-| `100 usd ahorro` | Ahorro, US$100, Deel USD, Individual |
-| `alquiler 150000 banco compartido` | Hogar, $150.000 ARS, Banco, Compartido |
-| `netflix 2500` | Suscripciones, $2.500 ARS, [elige tarjeta], Individual |
-| `cafe 3000 efectivo` | Alimentacion, $3.000 ARS, Efectivo, Individual |
-| `cena 25000 deel compartido` | Alimentacion, $25.000 ARS, Deel Card, Compartido |
+| `uber 3500` | Transporte, $3.500, pregunta metodo de pago |
+| `super 15000 compartido banco` | Alimentacion, $15.000, Banco, Compartido 50/50 |
+| `cafe 6000 visa bbva` | Alimentacion, $6.000, Visa BBVA, Individual |
+| `alquiler 150000 banco compartido` | Hogar, $150.000, Banco, Compartido |
+| `netflix 2500 master galicia` | Suscripciones, $2.500, Master Galicia, Individual |
+| `cafe 3000 efectivo` | Alimentacion, $3.000, Efectivo, Individual |
+| `un almuerzo de doce mil pesos con la visa` | Alimentacion, $12.000, detecta tu Visa, Individual |
 
 ### Como funciona
 
-1. Escribis el mensaje
-2. El bot muestra un preview con todos los datos
-3. Si el metodo es tarjeta de credito, te muestra botones con tus tarjetas (ej: Visa Galicia, Master Galicia). Tocas cual usaste y se confirma.
-4. Si es otro metodo (efectivo, banco, deel), tocas **Confirmar** o **Cancelar**
-5. Se guarda en el Google Sheet con la tarjeta especifica
+1. Escribis el mensaje (como quieras, la IA lo interpreta)
+2. El bot muestra un preview con todos los datos detectados
+3. Si no mencionaste metodo de pago, te pregunta con botones
+4. Si dijiste "tarjeta" sin especificar cual, te muestra tus tarjetas para elegir
+5. Si la IA detecto todo (incluyendo tarjeta especifica), tocas **Confirmar** o **Cancelar**
+6. Se guarda en el Google Sheet
 
-### Palabras clave para metodo de pago
+### Metodos de pago
 
-- Sin especificar → **Tarjeta** (default, te pregunta cual)
-- `efectivo` → Efectivo
-- `banco` → Banco (transferencia)
-- `deel` → Deel Card (ARS)
-- `usd` → Deel USD
+Podes mencionarlos en el mensaje o el bot te pregunta despues:
+
+- **Tarjeta especifica:** `visa bbva`, `master galicia`, `deel visa`, etc.
+- **Tarjeta sin especificar:** `tarjeta` → te pregunta cual
+- **Banco:** `banco`, `transferencia`, `debito`
+- **Efectivo:** `efectivo`
+- **Deel Card:** `deel` (pagos en ARS con Deel)
+- **Deel USD:** `usd`, `deel usd` (pagos en dolares)
+- **Sin mencionar:** el bot pregunta con botones
 
 ### Tipo de gasto
 

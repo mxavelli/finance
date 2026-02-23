@@ -640,34 +640,47 @@ Streamlit Community Cloud:
 
 ---
 
-## Audio y fotos (Fase 9)
+## IA unificada — texto, audio y fotos (Fase 9)
 
-Soporte para registrar gastos por nota de voz y foto de recibo. Usa OpenAI (Whisper + GPT-4o-mini).
+Todo el parsing de gastos (texto, audio y fotos) usa GPT-4o-mini. La IA recibe las categorías del Sheet y las tarjetas de crédito específicas del usuario, resolviendo en un solo paso descripción, monto, categoría, método de pago (incluyendo tarjeta específica), tipo y cuotas.
 
 ### Configuración
 
-Variable de entorno: `OPENAI_API_KEY` (opcional — si no está, el bot responde que no está habilitado).
+Variable de entorno: `OPENAI_API_KEY` (requerida para registrar gastos).
 
-### Audio (notas de voz)
+### Flujo unificado
 
-- Handler: `bot.on('message:voice')` en `index.js`
-- Flujo: descargar OGG de Telegram → transcribir con Whisper (español) → `wordsToNumber()` → `parseTransaction()` → preview normal
-- `wordsToNumber()` en `parser.js`: convierte "tres mil quinientos" → "3500", "veinticinco mil" → "25000"
-- Costo: ~US$0.006/minuto
+1. **Texto**: `message:text` → `parseExpense(text, categorías, tarjetas)` → `buildTxFromAi()` → `showAiTxPreview()`
+2. **Audio**: `message:voice` → Whisper transcribe → `parseExpense(transcripción, categorías, tarjetas)` → `buildTxFromAi()` → `showAiTxPreview()`
+3. **Foto**: `message:photo` → `analyzeReceipt(url, categorías, tarjetas)` → `buildTxFromAi()` → `showAiTxPreview()`
 
-### Fotos de recibos
+### IA conoce las tarjetas del usuario
 
-- Handler: `bot.on('message:photo')` en `index.js`
-- Flujo: obtener URL temporal de Telegram → GPT-4o-mini vision → extraer JSON {descripcion, monto, metodoPago} → preview con botón Compartido toggle
-- Prompt del sistema define formato JSON estricto
-- Costo: ~US$0.0005/foto
+El prompt incluye las tarjetas específicas: "Visa Galicia, Master Galicia, Deel Visa" (Moises) o "Visa BBVA, Master BBVA, Deel Visa" (Oriana). Cuando el usuario dice "con la visa" la IA devuelve "Visa BBVA" directo. Si no menciona método → null → bot pregunta con botones.
+
+### Si falta info
+
+- **Sin método de pago**: botones inline [Tarjeta, Banco, Efectivo, Deel Card]
+- **Método "Tarjeta" genérico**: botones con tarjetas específicas del usuario
+- **Sin tipo**: default Individual del usuario que envía
+- El usuario puede responder con texto en vez de botones ("visa bbva", "banco", etc.)
+
+### Costos
+
+- GPT-4o-mini: ~US$0.15/millón tokens input. Cada gasto ~300 tokens → miles de gastos por centavo.
+- Whisper: ~US$0.006/minuto de audio.
 
 ### Archivos
 
-- `bot/src/ai.js` — Módulo OpenAI: `transcribeAudio(buffer)`, `analyzeReceipt(imageUrl)`, `isConfigured()`
-- `bot/src/parser.js` — Agregada función `wordsToNumber(text)`
-- `bot/src/config.js` — Agregada `openaiApiKey`
-- `bot/src/index.js` — Handlers `message:voice`, `message:photo`, callback `photo_shared`
+- `bot/src/ai.js` — `transcribeAudio(buffer)`, `parseExpense(text, categories, cards)`, `analyzeReceipt(url, categories, cards)`, `isConfigured()`
+- `bot/src/config.js` — `openaiApiKey`, `tarjetas` por usuario
+- `bot/src/index.js` — `buildTxFromAi()`, `showAiTxPreview()`, handlers texto/audio/foto, callbacks `ap:`, `card_`, `cuota_card_`
+- `bot/src/parser.js` — Legacy. Solo se usa `formatAmount()` para display.
+
+### Tarjetas de crédito
+
+- Moises: Visa Galicia, Master Galicia, Deel Visa
+- Oriana: Visa BBVA, Master BBVA, Deel Visa
 
 ---
 
@@ -675,5 +688,5 @@ Variable de entorno: `OPENAI_API_KEY` (opcional — si no está, el bot responde
 
 - **Fase 7: Refinamiento** — En progreso. Ya implementados: `/tarjeta`, `/registrar_fijos`, recordatorio gastos fijos, tarjetas de crédito específicas, cuotas de tarjeta, rangos expandidos, parsing locale, filtros robustos, auto-fijos diario, alertas de presupuesto, resumen semanal
 - **Fase 8: Dashboard Streamlit** — Funcionando en Streamlit Community Cloud con viewer auth
-- **Fase 9: Audio y fotos** — Implementado. Requiere OPENAI_API_KEY en Railway
+- **Fase 9: IA unificada** — Texto, audio y fotos, todo procesado con GPT-4o-mini. Requiere OPENAI_API_KEY.
 - Ideas pendientes: export, más ideas del usuario
