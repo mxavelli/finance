@@ -9,4 +9,6 @@ dashboard/venv/
 __pycache__/
 docs/extractos-moises/
 docs/gastos-recurrentes-moises.md
+docs/Visa Activity.md
+docs/Visa Movements.md
 *.csv
