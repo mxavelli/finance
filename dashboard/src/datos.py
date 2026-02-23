@@ -301,26 +301,21 @@ def cargar_ingresos_moises():
 
 @st.cache_data(ttl=300)
 def cargar_pagos_tc():
-    """Lee pagos de tarjeta de crédito, otros ingresos y saldo inicial desde hoja Pagos TC."""
+    """Lee pagos TC, otros ingresos, saldo anterior y sobrante real desde hoja Pagos TC."""
     try:
         sheet = get_sheet()
         ws = sheet.worksheet('Pagos TC')
     except Exception:
-        # Hoja no existe todavía
-        return {'saldo_inicial': 0, 'meses': pd.DataFrame()}
+        return {'meses': pd.DataFrame()}
 
-    # Saldo inicial (B2)
-    saldo_data = ws.get('B2', value_render_option='UNFORMATTED_VALUE')
-    saldo_inicial = _safe_float(saldo_data[0][0]) if saldo_data and saldo_data[0] else 0
-
-    # Datos mensuales (filas 5-16, cols B-G)
-    data = ws.get('B5:G16', value_render_option='UNFORMATTED_VALUE')
+    # Datos mensuales (filas 5-16, cols B-I)
+    data = ws.get('B5:I16', value_render_option='UNFORMATTED_VALUE')
     if not data:
-        return {'saldo_inicial': saldo_inicial, 'meses': pd.DataFrame()}
+        return {'meses': pd.DataFrame()}
 
     rows = []
     for i, r in enumerate(data[:12]):
-        while len(r) < 6:
+        while len(r) < 8:
             r.append(None)
         rows.append({
             'mes_num': i + 1,
@@ -330,8 +325,10 @@ def cargar_pagos_tc():
             'master_bbva': _safe_float(r[3]),
             'total_pagos_tc': _safe_float(r[4]),
             'otros_ingresos': _safe_float(r[5]),
+            'saldo_anterior': _safe_float(r[6]),
+            'sobrante_real': _safe_float(r[7]),
         })
-    return {'saldo_inicial': saldo_inicial, 'meses': pd.DataFrame(rows)}
+    return {'meses': pd.DataFrame(rows)}
 
 
 @st.cache_data(ttl=300)

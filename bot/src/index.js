@@ -533,8 +533,8 @@ async function cmdFlujo(ctx) {
 
     if (tieneIngresos) {
       text += `\n*📊 Sobrante ARS:* ${fmtMonto(flow.sobranteArs, 'ARS')}\n`;
-      if (flow.pagosTC.saldoInicial > 0) {
-        text += `  _Saldo ant: ${fmtMonto(flow.pagosTC.saldoInicial, 'ARS')}`;
+      if (flow.pagosTC.saldoAnterior > 0) {
+        text += `  _Saldo ant: ${fmtMonto(flow.pagosTC.saldoAnterior, 'ARS')}`;
         if (flow.pagosTC.otrosIngresos > 0) text += ` + otros: ${fmtMonto(flow.pagosTC.otrosIngresos, 'ARS')}`;
         text += `_\n`;
       }

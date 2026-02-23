@@ -694,21 +694,22 @@ async function getFlowData(month, year) {
   }
 
   // Leer pagos TC reales y otros ingresos desde hoja "Pagos TC"
-  let pagosTC = { saldoInicial: 0, totalPagosTC: 0, otrosIngresos: 0 };
+  let pagosTC = { saldoAnterior: 0, totalPagosTC: 0, otrosIngresos: 0, sobranteReal: 0 };
   try {
     pagosTC = await getPagosTC(month);
   } catch (e) {
-    // Si la hoja no existe, usar fallback con tarjeta mes anterior
+    // Si la hoja no existe todavía
   }
 
   const totalIngresadoArs = moises.recibidoArs + oriana.recibidoArs;
 
-  // Sobrante = saldo_anterior + ingresos_moises + otros_ingresos - gastos_banco_efectivo - pagos_tc
-  // Solo ingresos de Moises porque los pagos TC son de su cuenta bancaria
-  // Excluir Deel Card de gastos líquidos (viene de USD, no de ARS del banco)
+  // Sobrante: si hay override (sobranteReal), usar ese valor directamente.
+  // Sino calcular: saldo_anterior + ingresos_moises + otros_ingresos - gastos_banco_efectivo - pagos_tc
   const gastoBancoEfectivo = gastadoLiquido - gastadoDeelCard;
-  const sobranteArs = pagosTC.saldoInicial + moises.recibidoArs + pagosTC.otrosIngresos
-                    - gastoBancoEfectivo - pagosTC.totalPagosTC;
+  const sobranteArs = pagosTC.sobranteReal > 0
+    ? pagosTC.sobranteReal
+    : pagosTC.saldoAnterior + moises.recibidoArs + pagosTC.otrosIngresos
+      - gastoBancoEfectivo - pagosTC.totalPagosTC;
 
   return {
     moises,
@@ -3037,29 +3038,32 @@ async function setupPagosTC() {
   const data = [];
 
   data.push({ range: 'Pagos TC!A1', values: [['Pagos Tarjeta de Crédito y Ajustes']] });
-  data.push({ range: 'Pagos TC!A2:B2', values: [['Saldo Inicial', 33901]] });
-
   // Headers
   data.push({
-    range: 'Pagos TC!A4:G4',
-    values: [['Mes', 'Visa Galicia', 'Master Galicia', 'Visa BBVA', 'Master BBVA', 'Total Pagos TC', 'Otros Ingresos']],
+    range: 'Pagos TC!A4:I4',
+    values: [['Mes', 'Visa Galicia', 'Master Galicia', 'Visa BBVA', 'Master BBVA', 'Total Pagos TC', 'Otros Ingresos', 'Saldo Anterior', 'Sobrante Real']],
   });
 
   // Filas de meses con fórmula Total
   const mesRows = meses.map((m, i) => {
-    const row = i + 5; // fila 5 = Enero, fila 6 = Febrero, etc.
-    return [m, '', '', '', '', loc(`=SUM(B${row}:E${row})`), ''];
+    const row = i + 5;
+    return [m, '', '', '', '', loc(`=SUM(B${row}:E${row})`), '', '', ''];
   });
-  data.push({ range: 'Pagos TC!A5:G16', values: mesRows });
+  data.push({ range: 'Pagos TC!A5:I16', values: mesRows });
 
   // Pre-llenar datos de Febrero 2026 (fila 6)
   data.push({
     range: 'Pagos TC!B6:C6',
-    values: [[1160691.05, 302347.02]], // Visa y Master totales reales del extracto bancario
+    values: [[1160691.05, 302347.02]],
   });
   data.push({
-    range: 'Pagos TC!G6',
-    values: [[170280]], // Heller $160K + Reintegro Galicia $10,280
+    range: 'Pagos TC!G6:I6',
+    values: [[170280, 33901, 31520]], // Otros ingresos, Saldo Anterior, Sobrante Real
+  });
+  // Marzo: saldo anterior = sobrante real de febrero
+  data.push({
+    range: 'Pagos TC!H7',
+    values: [[31520]],
   });
 
   await sheets.spreadsheets.values.batchUpdate({
@@ -3070,10 +3074,10 @@ async function setupPagosTC() {
   // 4. Estilos
   const requests = [];
 
-  // Merge título A1:G1
+  // Merge título A1:I1
   requests.push({
     mergeCells: {
-      range: { sheetId: tcSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 7 },
+      range: { sheetId: tcSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 9 },
       mergeType: 'MERGE_ALL',
     },
   });
@@ -3081,7 +3085,7 @@ async function setupPagosTC() {
   // Estilo título
   requests.push({
     repeatCell: {
-      range: { sheetId: tcSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 7 },
+      range: { sheetId: tcSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 9 },
       cell: {
         userEnteredFormat: {
           backgroundColor: { red: 0.10, green: 0.25, blue: 0.45 },
@@ -3093,24 +3097,10 @@ async function setupPagosTC() {
     },
   });
 
-  // Estilo Saldo Inicial (fila 2)
-  requests.push({
-    repeatCell: {
-      range: { sheetId: tcSheetId, startRowIndex: 1, endRowIndex: 2, startColumnIndex: 0, endColumnIndex: 2 },
-      cell: {
-        userEnteredFormat: {
-          backgroundColor: { red: 0.95, green: 0.95, blue: 0.85 },
-          textFormat: { bold: true },
-        },
-      },
-      fields: 'userEnteredFormat(backgroundColor,textFormat)',
-    },
-  });
-
   // Headers fila 4
   requests.push({
     repeatCell: {
-      range: { sheetId: tcSheetId, startRowIndex: 3, endRowIndex: 4, startColumnIndex: 0, endColumnIndex: 7 },
+      range: { sheetId: tcSheetId, startRowIndex: 3, endRowIndex: 4, startColumnIndex: 0, endColumnIndex: 9 },
       cell: {
         userEnteredFormat: {
           backgroundColor: { red: 0.80, green: 0.20, blue: 0.20 },
@@ -3122,23 +3112,10 @@ async function setupPagosTC() {
     },
   });
 
-  // Formato moneda para B5:G16
+  // Formato moneda para B5:I16
   requests.push({
     repeatCell: {
-      range: { sheetId: tcSheetId, startRowIndex: 4, endRowIndex: 16, startColumnIndex: 1, endColumnIndex: 7 },
-      cell: {
-        userEnteredFormat: {
-          numberFormat: { type: 'CURRENCY', pattern: '$#,##0.00' },
-        },
-      },
-      fields: 'userEnteredFormat.numberFormat',
-    },
-  });
-
-  // Formato moneda para saldo inicial B2
-  requests.push({
-    repeatCell: {
-      range: { sheetId: tcSheetId, startRowIndex: 1, endRowIndex: 2, startColumnIndex: 1, endColumnIndex: 2 },
+      range: { sheetId: tcSheetId, startRowIndex: 4, endRowIndex: 16, startColumnIndex: 1, endColumnIndex: 9 },
       cell: {
         userEnteredFormat: {
           numberFormat: { type: 'CURRENCY', pattern: '$#,##0.00' },
@@ -3158,7 +3135,7 @@ async function setupPagosTC() {
   });
   requests.push({
     updateDimensionProperties: {
-      range: { sheetId: tcSheetId, dimension: 'COLUMNS', startIndex: 1, endIndex: 7 },
+      range: { sheetId: tcSheetId, dimension: 'COLUMNS', startIndex: 1, endIndex: 9 },
       properties: { pixelSize: 150 },
       fields: 'pixelSize',
     },
@@ -3172,36 +3149,101 @@ async function setupPagosTC() {
   console.log('Hoja "Pagos TC" creada con datos de Febrero 2026.');
 }
 
-// Lee los pagos de tarjeta y otros ingresos para un mes dado.
-// Retorna { saldoInicial, pagoVisa, pagoMaster, pagoVisaBBVA, pagoMasterBBVA, totalPagosTC, otrosIngresos }
+// Migra la hoja Pagos TC: agrega columnas H (Saldo Anterior) e I (Sobrante Real).
+// Ejecutar una sola vez: node -e "require('./src/sheets').migratePagosTC()"
+async function migratePagosTC() {
+  const spreadsheetId = config.sheetId;
+
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const tcSheet = meta.data.sheets.find(s => s.properties.title === 'Pagos TC');
+  if (!tcSheet) throw new Error('Hoja Pagos TC no existe');
+  const tcSheetId = tcSheet.properties.sheetId;
+
+  // Headers nuevos + datos
+  const data = [
+    { range: 'Pagos TC!H4:I4', values: [['Saldo Anterior', 'Sobrante Real']] },
+    // Feb: saldo anterior = 33901, sobrante real = 31520
+    { range: 'Pagos TC!H6:I6', values: [[33901, 31520]] },
+    // Mar: saldo anterior = 31520 (el sobrante real de Feb)
+    { range: 'Pagos TC!H7', values: [[31520]] },
+  ];
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: { valueInputOption: 'USER_ENTERED', data },
+  });
+
+  // Estilos para las nuevas columnas
+  const requests = [];
+
+  // Headers H4:I4
+  requests.push({
+    repeatCell: {
+      range: { sheetId: tcSheetId, startRowIndex: 3, endRowIndex: 4, startColumnIndex: 7, endColumnIndex: 9 },
+      cell: {
+        userEnteredFormat: {
+          backgroundColor: { red: 0.80, green: 0.20, blue: 0.20 },
+          textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } },
+          horizontalAlignment: 'CENTER',
+        },
+      },
+      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+    },
+  });
+
+  // Formato moneda H5:I16
+  requests.push({
+    repeatCell: {
+      range: { sheetId: tcSheetId, startRowIndex: 4, endRowIndex: 16, startColumnIndex: 7, endColumnIndex: 9 },
+      cell: {
+        userEnteredFormat: {
+          numberFormat: { type: 'CURRENCY', pattern: '$#,##0.00' },
+        },
+      },
+      fields: 'userEnteredFormat.numberFormat',
+    },
+  });
+
+  // Ancho columnas H-I
+  requests.push({
+    updateDimensionProperties: {
+      range: { sheetId: tcSheetId, dimension: 'COLUMNS', startIndex: 7, endIndex: 9 },
+      properties: { pixelSize: 150 },
+      fields: 'pixelSize',
+    },
+  });
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests },
+  });
+
+  console.log('Pagos TC migrado: columnas Saldo Anterior e Sobrante Real agregadas.');
+}
+
+// Lee los pagos de tarjeta, otros ingresos, saldo anterior y sobrante real para un mes dado.
 async function getPagosTC(month) {
   const spreadsheetId = config.sheetId;
 
-  // Saldo inicial (B2)
-  const saldoRes = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Pagos TC!B2',
-    valueRenderOption: 'UNFORMATTED_VALUE',
-  });
-  const saldoInicial = (saldoRes.data.values?.[0]?.[0]) || 0;
-
   // Datos del mes: fila = month + 4 (Ene=5, Feb=6, ...)
+  // Columnas B-I: Visa, Master, VisaBBVA, MasterBBVA, Total, OtrosIngresos, SaldoAnterior, SobranteReal
   const row = month + 4;
   const mesRes = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `Pagos TC!B${row}:G${row}`,
+    range: `Pagos TC!B${row}:I${row}`,
     valueRenderOption: 'UNFORMATTED_VALUE',
   });
   const d = mesRes.data.values?.[0] || [];
 
   return {
-    saldoInicial: typeof saldoInicial === 'number' ? saldoInicial : 0,
     pagoVisa: d[0] || 0,
     pagoMaster: d[1] || 0,
     pagoVisaBBVA: d[2] || 0,
     pagoMasterBBVA: d[3] || 0,
     totalPagosTC: d[4] || 0,
     otrosIngresos: d[5] || 0,
+    saldoAnterior: d[6] || 0,
+    sobranteReal: d[7] || 0,  // Override: si > 0, usar este valor
   };
 }
 
@@ -3250,5 +3292,5 @@ module.exports = {
   setupEstilosDark,
   setupCrypto, getCryptoHoldings, getCryptoTransactions, appendCryptoTransaction, addCryptoHolding,
   setupInversiones, getInversiones, getInversionesHistorial, updateInversiones, appendInversionesHistorial,
-  setupPagosTC, getPagosTC, registrarPagoTC, registrarOtrosIngresos,
+  setupPagosTC, migratePagosTC, getPagosTC, registrarPagoTC, registrarOtrosIngresos,
 };
