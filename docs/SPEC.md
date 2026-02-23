@@ -101,6 +101,10 @@ El salario llega en USD a Deel y se distribuye en 3 bolsillos:
 | Scheduler separado | `scheduler.js` encapsula todos los cron jobs. Recibe contexto compartido para evitar dependencias circulares con index.js | 2026-02-19 |
 | getPresupuestos() | Lee Presupuesto ARS (3 secciones) + USD (1 sección). Retorna Map con clave `"categoria\|tipo\|moneda"` → monto mensual | 2026-02-19 |
 
+| Pagos TC reales | Hoja "Pagos TC" con TOTAL A PAGAR de cada resumen de tarjeta. Los montos de resúmenes incluyen cargos financieros, cuotas de compras anteriores, IVA y percepciones — no se pueden derivar de transacciones individuales | 2026-02-23 |
+| Sobrante ARS determinístico | Fórmula: `saldo_inicial + ingresos + otros_ingresos - gastos_banco_efectivo - pagos_TC_reales`. Excluye Deel Card (USD) y tarjeta del mes (se paga mes siguiente). Debe coincidir con saldo real en banco + MP | 2026-02-23 |
+| Otros Ingresos | Columna en Pagos TC para ingresos no registrados en el bot (ej: transfer Heller, reintegros bancarios). Se suman al sobrante | 2026-02-23 |
+| Saldo Inicial | Monto fijo en Pagos TC que representa el saldo ARS al inicio del tracking (banco + MercadoPago). Se usa como punto de partida del sobrante | 2026-02-23 |
 | Categorías Seguros e Impuestos | Nuevas categorías agregadas a la hoja Categorías. Validación de dropdowns actualizada a rango `A2:A50` para soportar futuras categorías | 2026-02-22 |
 | Saldar gastos compartidos | Columna Q "Saldado" en Transacciones. Fórmulas de Balance Compartido excluyen transacciones con Q="Sí". Comando /saldar muestra items compartidos pendientes agrupados por mes, usuario elige cuál marcar como saldado. No afecta Dashboard ni Resumen — solo el Balance | 2026-02-22 |
 | Frecuencia gastos fijos | Columnas I "Frecuencia" (Mensual/Trimestral/Anual) y J "Meses" (números separados por coma) en Gastos Fijos. /registrar\_fijos, /gastosfijos y auto-fijos filtran según mes actual. Anuales solo aparecen en su mes de renovación | 2026-02-22 |
@@ -185,6 +189,7 @@ El salario llega en USD a Deel y se distribuye en 3 bolsillos:
 9. **Cuotas** — Compras en cuotas con tracking de cuotas registradas y estado
 10. **Crypto** — Portafolio de criptomonedas con precio live (GOOGLEFINANCE) e historial de compras/ventas
 11. **Inversiones** — Portafolio de inversiones (PPI): valor total + composición porcentual (Acciones, CEDEARs, FCIs), historial de valor con variación
+12. **Pagos TC** — Pagos reales de resúmenes de tarjeta de crédito, otros ingresos no registrados, saldo inicial
 
 ### Cuotas
 
@@ -252,6 +257,27 @@ Fila 10: TOTAL con B10=SUM(B4:B9), C10=valor total manual.
 | B | Valor Total ARS | Monto total del portafolio |
 | C | Variación ARS | ARRAYFORMULA: diferencia vs fila anterior |
 | D | Notas | Texto libre |
+
+### Pagos TC (hoja 12)
+
+Registra datos que no se derivan de transacciones individuales: pagos reales de resúmenes de TC, ingresos extras no registrados en el bot, y saldo inicial.
+
+**Saldo Inicial (fila 2):**
+| Columna | Campo | Notas |
+|---------|-------|-------|
+| A | "Saldo Inicial" | Label |
+| B | Monto | Saldo ARS al inicio del tracking (banco + MP) |
+
+**Datos mensuales (filas 5-16, Ene-Dic):**
+| Columna | Campo | Notas |
+|---------|-------|-------|
+| A | Mes | Enero, Febrero, ... |
+| B | Visa Galicia | TOTAL A PAGAR del resumen |
+| C | Master Galicia | TOTAL A PAGAR del resumen |
+| D | Visa BBVA | TOTAL A PAGAR del resumen |
+| E | Master BBVA | TOTAL A PAGAR del resumen |
+| F | Total Pagos TC | Fórmula: SUM(B:E) de la fila |
+| G | Otros Ingresos | Ingresos no registrados (Heller, reintegros, etc.) |
 
 ### Presupuesto (ARS y USD)
 
@@ -366,6 +392,7 @@ Archivo `.env` en la **raíz del proyecto** (no en `bot/`).
 | `/saldar` | Marcar gastos compartidos como saldados (columna Q en Transacciones) |
 | `/crypto` | Portafolio crypto: ver holdings con precio live, registrar compras/ventas |
 | `/inversiones` | Portafolio inversiones (PPI): ver total y composición, actualizar valor y porcentajes |
+| `/pago_tarjeta` | Registrar el TOTAL A PAGAR de un resumen de tarjeta de crédito. Uso: `/pago_tarjeta Visa Galicia 1085559.70 [mes]` |
 | Texto libre | Parsea como transacción, muestra preview con botones |
 | ✅ Confirmar | Guarda la transacción en Google Sheets |
 | ❌ Cancelar | Descarta la transacción |
@@ -387,8 +414,8 @@ Al iniciar el bot, si las env vars de ingresos están configuradas y el mes actu
 
 1. Usuario envía `/flujo` o `/flujo febrero`
 2. Bot lee datos de Ingresos (ambos) + suma transacciones del mes
-3. Muestra: ingresos ARS (Moises + Oriana), gastos ARS (con desglose Tarjeta este mes y tarjeta mes anterior), sobrante ARS, y sección USD (salario, transferido, gastado, queda en Deel)
-4. Fórmula sobrante: `ingresos - gastos líquidos - tarjeta mes anterior`. Los gastos con tarjeta de ESTE mes no se restan (se pagan el mes siguiente). Los gastos con tarjeta del mes ANTERIOR sí se restan (se pagan ahora). Inversiones PPI NO se restan por separado (ya están incluidas como transacción Banco si se transfirió dinero).
+3. Muestra: ingresos ARS, gastos ARS (desglose banco+efectivo, Deel Card, tarjeta), pagos TC reales, sobrante ARS, y sección USD
+4. Fórmula sobrante: `saldo_inicial + ingresos_ARS + otros_ingresos - gastos_banco_efectivo - pagos_TC_reales`. Los gastos con tarjeta del mes NO se restan (aparecen en el resumen TC del mes siguiente). Los gastos Deel Card NO se restan (vienen de USD). Los pagos TC son el TOTAL A PAGAR real de cada resumen de tarjeta (incluye cargos financieros, cuotas anteriores, IVA, percepciones). Inversiones PPI incluidas como transacción Banco si se transfirió dinero.
 
 ### Flujo de /tarjeta
 
@@ -556,6 +583,14 @@ cd bot && node -e "require('./src/sheets').setupCuotas()"
 
 `setupCuotas()` crea la hoja Cuotas con headers, validaciones, fórmulas de estado y estilos. Ejecutar una sola vez.
 
+### Pagos TC
+
+```bash
+cd bot && node -e "require('./src/sheets').setupPagosTC()"
+```
+
+`setupPagosTC()` crea la hoja Pagos TC con: saldo inicial, headers mensuales (Ene-Dic), columnas por tarjeta, fórmula Total, columna Otros Ingresos, y estilos. Pre-llena datos de Feb 2026. Ejecutar una sola vez.
+
 ---
 
 ## Dashboard Streamlit (Fase 8)
@@ -589,7 +624,7 @@ dashboard/
 | Presupuesto vs real | Barras con colores por %, progress bars |
 | Métodos de pago | Distribución por método, total tarjetas |
 | Cuotas activas | Lista con progreso, total mensual |
-| Flujo de caja | Ingresos vs gastos ARS/USD, sobrante |
+| Flujo de caja | Ingresos vs gastos ARS/USD, pagos TC reales, sobrante determinístico |
 | Gastos fijos | Registrados vs pendientes, progreso |
 | Comparativo M vs O | Barras agrupadas por categoría |
 

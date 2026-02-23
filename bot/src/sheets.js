@@ -666,14 +666,10 @@ async function getFlowData(month, year) {
     recibidoArs: parseLocalNumber(oData[4]),
   };
 
-  // Sumar gastos del mes actual y tarjeta del mes anterior
+  // Sumar gastos del mes actual
   const rows = transRes.data.values || [];
   let gastadoArs = 0, gastadoUsd = 0, gastadoTarjeta = 0, gastadoLiquido = 0;
-  let tarjetaMesAnterior = 0;
-
-  // Mes anterior para calcular pago de tarjeta
-  const prevMonth = month > 1 ? month - 1 : 12;
-  const prevYear = month > 1 ? year : year - 1;
+  let gastadoDeelCard = 0;
 
   for (const r of rows) {
     if (!r[0]) continue;
@@ -682,15 +678,7 @@ async function getFlowData(month, year) {
     const rMonth = parseInt(parts[1]);
     const rYear = parseInt(parts[2]);
 
-    // Tarjeta del mes anterior (se paga este mes)
-    if (rMonth === prevMonth && rYear === prevYear) {
-      if (r[5] !== 'USD' && esTarjeta(r[6])) {
-        tarjetaMesAnterior += parseLocalNumber(r[4]);
-      }
-      continue;
-    }
-
-    // Gastos del mes actual
+    // Solo gastos del mes actual
     if (rMonth !== month || rYear !== year) continue;
 
     const monto = parseLocalNumber(r[4]);
@@ -698,13 +686,28 @@ async function getFlowData(month, year) {
     else {
       gastadoArs += monto;
       if (esTarjeta(r[6])) gastadoTarjeta += monto;
-      else gastadoLiquido += monto;
+      else {
+        gastadoLiquido += monto;
+        if (r[6] === 'Deel Card') gastadoDeelCard += monto;
+      }
     }
   }
 
-  // Sobrante = ingresos - gastos liquidos - tarjeta mes anterior (pagada este mes).
-  // Los gastos con tarjeta de este mes se pagan el mes siguiente, no salen del bolsillo ahora.
+  // Leer pagos TC reales y otros ingresos desde hoja "Pagos TC"
+  let pagosTC = { saldoInicial: 0, totalPagosTC: 0, otrosIngresos: 0 };
+  try {
+    pagosTC = await getPagosTC(month);
+  } catch (e) {
+    // Si la hoja no existe, usar fallback con tarjeta mes anterior
+  }
+
   const totalIngresadoArs = moises.recibidoArs + oriana.recibidoArs;
+
+  // Sobrante = saldo_anterior + (ingresos + otros_ingresos) - gastos_banco_efectivo - pagos_tc
+  // Excluir Deel Card de gastos líquidos (viene de USD, no de ARS del banco)
+  const gastoBancoEfectivo = gastadoLiquido - gastadoDeelCard;
+  const sobranteArs = pagosTC.saldoInicial + totalIngresadoArs + pagosTC.otrosIngresos
+                    - gastoBancoEfectivo - pagosTC.totalPagosTC;
 
   return {
     moises,
@@ -714,8 +717,10 @@ async function getFlowData(month, year) {
     gastadoUsd,
     gastadoTarjeta,
     gastadoLiquido,
-    tarjetaMesAnterior,
-    sobranteArs: totalIngresadoArs - gastadoLiquido - tarjetaMesAnterior,
+    gastadoDeelCard,
+    gastoBancoEfectivo,
+    pagosTC,
+    sobranteArs,
     salarioTotalUsd: moises.salarioUsd + oriana.salarioUsd,
     transferidoTotal: moises.transferido + oriana.transferido,
     quedaDeelTotal: moises.quedaDeel + oriana.quedaDeel,
@@ -2995,6 +3000,245 @@ async function appendInversionesHistorial(fecha, total, notas) {
 }
 
 
+// Crea hoja "Pagos TC" para registrar totales reales de resúmenes de tarjeta y otros ingresos.
+// Ejecutar una sola vez: node -e "require('./src/sheets').setupPagosTC()"
+async function setupPagosTC() {
+  const spreadsheetId = config.sheetId;
+  function loc(f) { return f.replace(/,/g, ';'); }
+
+  // 1. Crear hoja
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{
+        addSheet: {
+          properties: {
+            title: 'Pagos TC',
+            tabColorStyle: { rgbColor: { red: 0.80, green: 0.20, blue: 0.20 } },
+          },
+        },
+      }],
+    },
+  });
+
+  // 2. Obtener sheetId
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const tcSheetId = meta.data.sheets.find(s => s.properties.title === 'Pagos TC').properties.sheetId;
+
+  // 3. Estructura:
+  // Fila 1: Título
+  // Fila 2: Saldo inicial (disponible al 1ro del primer mes de seguimiento)
+  // Fila 3: vacía
+  // Fila 4: Headers
+  // Filas 5-16: Meses (Ene-Dic)
+  const meses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+                 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  const data = [];
+
+  data.push({ range: 'Pagos TC!A1', values: [['Pagos Tarjeta de Crédito y Ajustes']] });
+  data.push({ range: 'Pagos TC!A2:B2', values: [['Saldo Inicial', 33901]] });
+
+  // Headers
+  data.push({
+    range: 'Pagos TC!A4:G4',
+    values: [['Mes', 'Visa Galicia', 'Master Galicia', 'Visa BBVA', 'Master BBVA', 'Total Pagos TC', 'Otros Ingresos']],
+  });
+
+  // Filas de meses con fórmula Total
+  const mesRows = meses.map((m, i) => {
+    const row = i + 5; // fila 5 = Enero, fila 6 = Febrero, etc.
+    return [m, '', '', '', '', loc(`=SUM(B${row}:E${row})`), ''];
+  });
+  data.push({ range: 'Pagos TC!A5:G16', values: mesRows });
+
+  // Pre-llenar datos de Febrero 2026 (fila 6)
+  data.push({
+    range: 'Pagos TC!B6:C6',
+    values: [[1160691.05, 302347.02]], // Visa y Master totales reales del extracto bancario
+  });
+  data.push({
+    range: 'Pagos TC!G6',
+    values: [[170280]], // Heller $160K + Reintegro Galicia $10,280
+  });
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: { valueInputOption: 'USER_ENTERED', data },
+  });
+
+  // 4. Estilos
+  const requests = [];
+
+  // Merge título A1:G1
+  requests.push({
+    mergeCells: {
+      range: { sheetId: tcSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 7 },
+      mergeType: 'MERGE_ALL',
+    },
+  });
+
+  // Estilo título
+  requests.push({
+    repeatCell: {
+      range: { sheetId: tcSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 7 },
+      cell: {
+        userEnteredFormat: {
+          backgroundColor: { red: 0.10, green: 0.25, blue: 0.45 },
+          textFormat: { bold: true, fontSize: 14, foregroundColor: { red: 1, green: 1, blue: 1 } },
+          horizontalAlignment: 'CENTER',
+        },
+      },
+      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+    },
+  });
+
+  // Estilo Saldo Inicial (fila 2)
+  requests.push({
+    repeatCell: {
+      range: { sheetId: tcSheetId, startRowIndex: 1, endRowIndex: 2, startColumnIndex: 0, endColumnIndex: 2 },
+      cell: {
+        userEnteredFormat: {
+          backgroundColor: { red: 0.95, green: 0.95, blue: 0.85 },
+          textFormat: { bold: true },
+        },
+      },
+      fields: 'userEnteredFormat(backgroundColor,textFormat)',
+    },
+  });
+
+  // Headers fila 4
+  requests.push({
+    repeatCell: {
+      range: { sheetId: tcSheetId, startRowIndex: 3, endRowIndex: 4, startColumnIndex: 0, endColumnIndex: 7 },
+      cell: {
+        userEnteredFormat: {
+          backgroundColor: { red: 0.80, green: 0.20, blue: 0.20 },
+          textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } },
+          horizontalAlignment: 'CENTER',
+        },
+      },
+      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+    },
+  });
+
+  // Formato moneda para B5:G16
+  requests.push({
+    repeatCell: {
+      range: { sheetId: tcSheetId, startRowIndex: 4, endRowIndex: 16, startColumnIndex: 1, endColumnIndex: 7 },
+      cell: {
+        userEnteredFormat: {
+          numberFormat: { type: 'CURRENCY', pattern: '$#,##0.00' },
+        },
+      },
+      fields: 'userEnteredFormat.numberFormat',
+    },
+  });
+
+  // Formato moneda para saldo inicial B2
+  requests.push({
+    repeatCell: {
+      range: { sheetId: tcSheetId, startRowIndex: 1, endRowIndex: 2, startColumnIndex: 1, endColumnIndex: 2 },
+      cell: {
+        userEnteredFormat: {
+          numberFormat: { type: 'CURRENCY', pattern: '$#,##0.00' },
+        },
+      },
+      fields: 'userEnteredFormat.numberFormat',
+    },
+  });
+
+  // Ancho columnas
+  requests.push({
+    updateDimensionProperties: {
+      range: { sheetId: tcSheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 1 },
+      properties: { pixelSize: 120 },
+      fields: 'pixelSize',
+    },
+  });
+  requests.push({
+    updateDimensionProperties: {
+      range: { sheetId: tcSheetId, dimension: 'COLUMNS', startIndex: 1, endIndex: 7 },
+      properties: { pixelSize: 150 },
+      fields: 'pixelSize',
+    },
+  });
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests },
+  });
+
+  console.log('Hoja "Pagos TC" creada con datos de Febrero 2026.');
+}
+
+// Lee los pagos de tarjeta y otros ingresos para un mes dado.
+// Retorna { saldoInicial, pagoVisa, pagoMaster, pagoVisaBBVA, pagoMasterBBVA, totalPagosTC, otrosIngresos }
+async function getPagosTC(month) {
+  const spreadsheetId = config.sheetId;
+
+  // Saldo inicial (B2)
+  const saldoRes = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Pagos TC!B2',
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  });
+  const saldoInicial = (saldoRes.data.values?.[0]?.[0]) || 0;
+
+  // Datos del mes: fila = month + 4 (Ene=5, Feb=6, ...)
+  const row = month + 4;
+  const mesRes = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `Pagos TC!B${row}:G${row}`,
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  });
+  const d = mesRes.data.values?.[0] || [];
+
+  return {
+    saldoInicial: typeof saldoInicial === 'number' ? saldoInicial : 0,
+    pagoVisa: d[0] || 0,
+    pagoMaster: d[1] || 0,
+    pagoVisaBBVA: d[2] || 0,
+    pagoMasterBBVA: d[3] || 0,
+    totalPagosTC: d[4] || 0,
+    otrosIngresos: d[5] || 0,
+  };
+}
+
+// Registra el pago de un resumen de tarjeta para un mes dado.
+async function registrarPagoTC(month, card, amount) {
+  const spreadsheetId = config.sheetId;
+  const row = month + 4;
+
+  // Mapear tarjeta a columna
+  const colMap = {
+    'Visa Galicia': 'B',
+    'Master Galicia': 'C',
+    'Visa BBVA': 'D',
+    'Master BBVA': 'E',
+  };
+  const col = colMap[card];
+  if (!col) throw new Error(`Tarjeta no reconocida: ${card}`);
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Pagos TC!${col}${row}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[amount]] },
+  });
+}
+
+// Registra otros ingresos (Heller, reintegros, etc.) para un mes dado.
+async function registrarOtrosIngresos(month, amount) {
+  const spreadsheetId = config.sheetId;
+  const row = month + 4;
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Pagos TC!G${row}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[amount]] },
+  });
+}
+
 module.exports = {
   sheets, testConnection, appendTransaction, setupPhase4, setupDashboard, setupDashboardCards, setupEstilos,
   getBalance, getMonthlyTransactions, getGastosFijos, updateGastoFijoMonto, getLastTransactions,
@@ -3005,4 +3249,5 @@ module.exports = {
   setupEstilosDark,
   setupCrypto, getCryptoHoldings, getCryptoTransactions, appendCryptoTransaction, addCryptoHolding,
   setupInversiones, getInversiones, getInversionesHistorial, updateInversiones, appendInversionesHistorial,
+  setupPagosTC, getPagosTC, registrarPagoTC, registrarOtrosIngresos,
 };

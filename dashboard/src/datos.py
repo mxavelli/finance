@@ -300,6 +300,41 @@ def cargar_ingresos_moises():
 
 
 @st.cache_data(ttl=300)
+def cargar_pagos_tc():
+    """Lee pagos de tarjeta de crédito, otros ingresos y saldo inicial desde hoja Pagos TC."""
+    try:
+        sheet = get_sheet()
+        ws = sheet.worksheet('Pagos TC')
+    except Exception:
+        # Hoja no existe todavía
+        return {'saldo_inicial': 0, 'meses': pd.DataFrame()}
+
+    # Saldo inicial (B2)
+    saldo_data = ws.get('B2', value_render_option='UNFORMATTED_VALUE')
+    saldo_inicial = _safe_float(saldo_data[0][0]) if saldo_data and saldo_data[0] else 0
+
+    # Datos mensuales (filas 5-16, cols B-G)
+    data = ws.get('B5:G16', value_render_option='UNFORMATTED_VALUE')
+    if not data:
+        return {'saldo_inicial': saldo_inicial, 'meses': pd.DataFrame()}
+
+    rows = []
+    for i, r in enumerate(data[:12]):
+        while len(r) < 6:
+            r.append(None)
+        rows.append({
+            'mes_num': i + 1,
+            'visa_galicia': _safe_float(r[0]),
+            'master_galicia': _safe_float(r[1]),
+            'visa_bbva': _safe_float(r[2]),
+            'master_bbva': _safe_float(r[3]),
+            'total_pagos_tc': _safe_float(r[4]),
+            'otros_ingresos': _safe_float(r[5]),
+        })
+    return {'saldo_inicial': saldo_inicial, 'meses': pd.DataFrame(rows)}
+
+
+@st.cache_data(ttl=300)
 def cargar_ingresos_oriana():
     """Lee ingresos de Oriana: 12 meses (mismo layout que Moises)."""
     sheet = get_sheet()

@@ -93,7 +93,7 @@ else:
 from src.datos import (
     cargar_transacciones, filtrar_mes, cargar_gastos_fijos, cargar_cuotas,
     cargar_balance, cargar_presupuesto_ars, cargar_presupuesto_usd,
-    cargar_ingresos_moises, cargar_ingresos_oriana,
+    cargar_ingresos_moises, cargar_ingresos_oriana, cargar_pagos_tc,
     cargar_crypto_holdings, cargar_crypto_transacciones,
     cargar_inversiones, cargar_inversiones_historial,
 )
@@ -225,6 +225,18 @@ def render_resumen(mes, anio):
     metodos_tarjeta = ['Visa Galicia', 'Master Galicia', 'Visa BBVA', 'Master BBVA', 'Tarjeta']
     df_ars_liquido = df_ars[~df_ars['metodo_pago'].isin(metodos_tarjeta)]
 
+    # Pagos TC reales y otros ingresos
+    ptc = cargar_pagos_tc()
+    ptc_mes = ptc['meses']
+    pagos_tc = 0
+    otros_ingresos = 0
+    if not ptc_mes.empty and mes <= len(ptc_mes):
+        row_tc = ptc_mes[ptc_mes['mes_num'] == mes]
+        if not row_tc.empty:
+            pagos_tc = row_tc.iloc[0]['total_pagos_tc']
+            otros_ingresos = row_tc.iloc[0]['otros_ingresos']
+    saldo_inicial = ptc.get('saldo_inicial', 0)
+
     # Filtrar según usuario seleccionado
     if usuario == 'Moises':
         total_ars = df_ars['monto_moises'].sum()
@@ -232,33 +244,25 @@ def render_resumen(mes, anio):
         total_ingresos = ingreso_m_ars
         label_ingreso = 'Ingreso Moises'
         label_gasto = 'Gastado Moises'
-        # Sobrante: solo gastos líquidos (banco/efectivo/deel), monto total porque Moises financia el hogar
-        gasto_sobrante = df_ars_liquido['monto'].sum()
+        # Sobrante: gastos Banco + Efectivo (excluir Deel Card que viene de USD)
+        gasto_banco_efectivo = df_ars_liquido[df_ars_liquido['metodo_pago'] != 'Deel Card']['monto'].sum()
     elif usuario == 'Oriana':
         total_ars = df_ars['monto_oriana'].sum()
         total_usd = 0
         total_ingresos = ingreso_o_ars
         label_ingreso = 'Ingreso Oriana'
         label_gasto = 'Gastado Oriana'
-        gasto_sobrante = df_ars_liquido['monto_oriana'].sum()
+        gasto_banco_efectivo = df_ars_liquido[df_ars_liquido['metodo_pago'] != 'Deel Card']['monto_oriana'].sum()
     else:
         total_ars = df_ars['monto'].sum()
         total_usd = df_usd['monto'].sum()
         total_ingresos = ingreso_m_ars + ingreso_o_ars
         label_ingreso = 'Ingresos ARS'
         label_gasto = 'Gastado ARS'
-        gasto_sobrante = df_ars_liquido['monto'].sum()
+        gasto_banco_efectivo = df_ars_liquido[df_ars_liquido['metodo_pago'] != 'Deel Card']['monto'].sum()
 
-    # Tarjeta del mes anterior (se paga este mes, sale del banco)
-    prev_mes = mes - 1 if mes > 1 else 12
-    prev_anio = anio if mes > 1 else anio - 1
-    df_prev = filtrar_mes(cargar_transacciones(), prev_mes, prev_anio)
-    tarjeta_mes_anterior = 0
-    if not df_prev.empty:
-        df_prev_tarjeta = df_prev[(df_prev['moneda'] == 'ARS') & (df_prev['metodo_pago'].isin(metodos_tarjeta))]
-        tarjeta_mes_anterior = df_prev_tarjeta['monto'].sum()
-
-    sobrante = total_ingresos - gasto_sobrante - tarjeta_mes_anterior
+    # Sobrante = saldo_anterior + ingresos + otros_ingresos - gastos_banco_efectivo - pagos_tc
+    sobrante = saldo_inicial + total_ingresos + otros_ingresos - gasto_banco_efectivo - pagos_tc
 
     # Sobrante — lo más importante arriba
     if total_ingresos > 0:
@@ -269,9 +273,9 @@ def render_resumen(mes, anio):
         total_tarjeta = df_ars[df_ars['metodo_pago'].isin(metodos_tarjeta)]['monto'].sum() if not df_ars.empty else 0
         detalles = []
         if total_tarjeta > 0:
-            detalles.append(f'Tarjeta este mes (pago mes prox): {formato_ars(total_tarjeta)}')
-        if tarjeta_mes_anterior > 0:
-            detalles.append(f'Tarjeta mes ant. (pagada ahora): {formato_ars(tarjeta_mes_anterior)}')
+            detalles.append(f'Tarjeta este mes: {formato_ars(total_tarjeta)}')
+        if pagos_tc > 0:
+            detalles.append(f'Pagos resúmenes TC: {formato_ars(pagos_tc)}')
         if detalles:
             st.caption(' | '.join(detalles))
 
@@ -675,34 +679,37 @@ def render_flujo(mes, anio):
     # Gastos con tarjeta no salen del bolsillo este mes (se pagan el mes siguiente)
     metodos_tarjeta = ['Visa Galicia', 'Master Galicia', 'Visa BBVA', 'Master BBVA', 'Tarjeta']
 
+    # Pagos TC reales y otros ingresos
+    ptc = cargar_pagos_tc()
+    ptc_mes = ptc['meses']
+    pagos_tc = 0
+    otros_ingresos = 0
+    if not ptc_mes.empty and mes <= len(ptc_mes):
+        row_tc = ptc_mes[ptc_mes['mes_num'] == mes]
+        if not row_tc.empty:
+            pagos_tc = row_tc.iloc[0]['total_pagos_tc']
+            otros_ingresos = row_tc.iloc[0]['otros_ingresos']
+    saldo_inicial = ptc.get('saldo_inicial', 0)
+
     # Calcular según usuario
     if usuario == 'Moises':
         total_ingresos_ars = recibido_m
         total_gastos_ars = df[df['moneda'] == 'ARS'][col_monto].sum() if not df.empty else 0
-        # Sobrante: solo gastos líquidos, monto total porque Moises financia el hogar
+        # Sobrante: gastos Banco + Efectivo (excluir Deel Card y Tarjeta)
         df_liquido = df[(df['moneda'] == 'ARS') & (~df['metodo_pago'].isin(metodos_tarjeta))] if not df.empty else df
-        gasto_sobrante = df_liquido['monto'].sum() if not df_liquido.empty else 0
+        gasto_banco_efectivo = df_liquido[df_liquido['metodo_pago'] != 'Deel Card']['monto'].sum() if not df_liquido.empty else 0
     elif usuario == 'Oriana':
         total_ingresos_ars = ingreso_o
         total_gastos_ars = df[df['moneda'] == 'ARS'][col_monto].sum() if not df.empty else 0
         df_liquido = df[(df['moneda'] == 'ARS') & (~df['metodo_pago'].isin(metodos_tarjeta))] if not df.empty else df
-        gasto_sobrante = df_liquido[col_monto].sum() if not df_liquido.empty else 0
+        gasto_banco_efectivo = df_liquido[df_liquido['metodo_pago'] != 'Deel Card'][col_monto].sum() if not df_liquido.empty else 0
     else:
         total_ingresos_ars = recibido_m + ingreso_o
         total_gastos_ars = df[df['moneda'] == 'ARS']['monto'].sum() if not df.empty else 0
         df_liquido = df[(df['moneda'] == 'ARS') & (~df['metodo_pago'].isin(metodos_tarjeta))] if not df.empty else df
-        gasto_sobrante = df_liquido['monto'].sum() if not df_liquido.empty else 0
+        gasto_banco_efectivo = df_liquido[df_liquido['metodo_pago'] != 'Deel Card']['monto'].sum() if not df_liquido.empty else 0
 
-    # Tarjeta del mes anterior (se paga este mes, sale del banco)
-    prev_mes = mes - 1 if mes > 1 else 12
-    prev_anio = anio if mes > 1 else anio - 1
-    df_prev = filtrar_mes(cargar_transacciones(), prev_mes, prev_anio)
-    tarjeta_mes_anterior = 0
-    if not df_prev.empty:
-        df_prev_tarjeta = df_prev[(df_prev['moneda'] == 'ARS') & (df_prev['metodo_pago'].isin(metodos_tarjeta))]
-        tarjeta_mes_anterior = df_prev_tarjeta['monto'].sum()
-
-    sobrante_ars = total_ingresos_ars - gasto_sobrante - tarjeta_mes_anterior
+    sobrante_ars = saldo_inicial + total_ingresos_ars + otros_ingresos - gasto_banco_efectivo - pagos_tc
     total_gastos_usd = df[df['moneda'] == 'USD']['monto'].sum() if not df.empty else 0
 
     # Sección ARS
@@ -751,8 +758,12 @@ def render_flujo(mes, anio):
         tarj_total_flujo = df[(df['moneda'] == 'ARS') & (df['metodo_pago'].isin(metodos_tarjeta))]['monto'].sum()
         if tarj_total_flujo > 0:
             detalles_flujo.append(f'Tarjeta este mes (pago mes prox): {formato_ars(tarj_total_flujo)}')
-    if tarjeta_mes_anterior > 0:
-        detalles_flujo.append(f'Tarjeta mes ant. (pagada ahora): {formato_ars(tarjeta_mes_anterior)}')
+    if pagos_tc > 0:
+        detalles_flujo.append(f'Pagos resúmenes TC: {formato_ars(pagos_tc)}')
+    if otros_ingresos > 0:
+        detalles_flujo.append(f'Otros ingresos: {formato_ars(otros_ingresos)}')
+    if saldo_inicial > 0 and mes == 2:
+        detalles_flujo.append(f'Saldo inicial: {formato_ars(saldo_inicial)}')
     if detalles_flujo:
         st.caption(' | '.join(detalles_flujo))
 

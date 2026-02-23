@@ -11,6 +11,7 @@ const {
   getPresupuestos, getSharedUnsettled, settleTransaction,
   getCryptoHoldings, getCryptoTransactions, appendCryptoTransaction, addCryptoHolding,
   getInversiones, getInversionesHistorial, updateInversiones, appendInversionesHistorial,
+  registrarPagoTC, registrarOtrosIngresos,
 } = require('./sheets');
 const { getCategories } = require('./categories');
 const { parseTransaction, formatAmount } = require('./parser');
@@ -517,19 +518,26 @@ async function cmdFlujo(ctx) {
     }
 
     text += `*📤 Gastos ARS:* ${fmtMonto(flow.gastadoArs, 'ARS')}\n`;
-    if (flow.gastadoLiquido > 0) {
-      text += `  — Líquido (banco/efectivo/deel): ${fmtMonto(flow.gastadoLiquido, 'ARS')}\n`;
+    if (flow.gastoBancoEfectivo > 0) {
+      text += `  — Banco + Efectivo: ${fmtMonto(flow.gastoBancoEfectivo, 'ARS')}\n`;
+    }
+    if (flow.gastadoDeelCard > 0) {
+      text += `  — Deel Card (USD): ${fmtMonto(flow.gastadoDeelCard, 'ARS')}\n`;
     }
     if (flow.gastadoTarjeta > 0) {
       text += `  — Tarjeta este mes (pago mes prox): ${fmtMonto(flow.gastadoTarjeta, 'ARS')}\n`;
     }
-    if (flow.tarjetaMesAnterior > 0) {
-      text += `  — Tarjeta mes ant. (pagada ahora): ${fmtMonto(flow.tarjetaMesAnterior, 'ARS')}\n`;
+    if (flow.pagosTC.totalPagosTC > 0) {
+      text += `  — Pagos resúmenes TC: ${fmtMonto(flow.pagosTC.totalPagosTC, 'ARS')}\n`;
     }
 
     if (tieneIngresos) {
-      text += `*📊 Sobrante ARS:* ${fmtMonto(flow.sobranteArs, 'ARS')}\n`;
-      text += `  _Sobrante = ingresos - líquido - tarjeta mes ant._\n`;
+      text += `\n*📊 Sobrante ARS:* ${fmtMonto(flow.sobranteArs, 'ARS')}\n`;
+      if (flow.pagosTC.saldoInicial > 0) {
+        text += `  _Saldo ant: ${fmtMonto(flow.pagosTC.saldoInicial, 'ARS')}`;
+        if (flow.pagosTC.otrosIngresos > 0) text += ` + otros: ${fmtMonto(flow.pagosTC.otrosIngresos, 'ARS')}`;
+        text += `_\n`;
+      }
     }
 
     // Sección USD
@@ -548,6 +556,63 @@ async function cmdFlujo(ctx) {
   }
 }
 bot.command('flujo', cmdFlujo);
+
+// /pago_tarjeta — registra el total del resumen de una tarjeta de crédito
+// Uso: /pago_tarjeta Visa Galicia 1085559.70 [mes]
+async function cmdPagoTarjeta(ctx) {
+  try {
+    const arg = (ctx.match || '').trim();
+    if (!arg) {
+      return ctx.reply(
+        '💳 *Registrar pago de resumen TC*\n\n' +
+        'Uso: `/pago_tarjeta <tarjeta> <monto> [mes]`\n\n' +
+        'Ejemplo:\n' +
+        '`/pago_tarjeta Visa Galicia 1085559.70`\n' +
+        '`/pago_tarjeta Master Galicia 287947.02 febrero`\n\n' +
+        'Tarjetas válidas: Visa Galicia, Master Galicia, Visa BBVA, Master BBVA',
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    // Parsear: buscar el monto numérico y separar tarjeta de mes
+    const tarjetas = ['Visa Galicia', 'Master Galicia', 'Visa BBVA', 'Master BBVA'];
+    let tarjeta = null;
+    let resto = arg;
+    for (const t of tarjetas) {
+      if (arg.toLowerCase().startsWith(t.toLowerCase())) {
+        tarjeta = t;
+        resto = arg.slice(t.length).trim();
+        break;
+      }
+    }
+    if (!tarjeta) {
+      return ctx.reply('Tarjeta no reconocida. Opciones: Visa Galicia, Master Galicia, Visa BBVA, Master BBVA');
+    }
+
+    // Separar monto y mes opcional
+    const parts = resto.split(/\s+/);
+    const montoStr = parts[0];
+    const mesStr = parts.slice(1).join(' ');
+
+    const monto = parseFloat(montoStr.replace(/\./g, '').replace(',', '.'));
+    if (isNaN(monto) || monto <= 0) {
+      return ctx.reply('Monto inválido. Ejemplo: `/pago_tarjeta Visa Galicia 1085559.70`', { parse_mode: 'Markdown' });
+    }
+
+    const { month } = mesStr ? parseMonth(mesStr) : getNowBA();
+
+    await registrarPagoTC(month, tarjeta, monto);
+    await ctx.reply(
+      `✅ Pago registrado: *${tarjeta}* — ${fmtMonto(monto, 'ARS')}\n` +
+      `Mes: ${MESES_CORTO[month - 1]}`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    console.error('Error en /pago_tarjeta:', error.message);
+    ctx.reply('Error registrando el pago. Revisá los logs.');
+  }
+}
+bot.command('pago_tarjeta', cmdPagoTarjeta);
 
 // /registrar_fijos — registra todos los gastos fijos pendientes del mes
 async function cmdRegistrarFijos(ctx) {
