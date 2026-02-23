@@ -651,32 +651,49 @@ async function getFlowData(month, year) {
   const oData = orianaRes.data.values?.[0] || [];
 
   const moises = {
-    salarioUsd: parseFloat(mData[0]) || 0,
-    quedaDeel: parseFloat(mData[1]) || 0,
-    transferido: parseFloat(mData[2]) || 0,
-    tc: parseFloat(mData[3]) || 0,
-    recibidoArs: parseFloat(mData[4]) || 0,
+    salarioUsd: parseLocalNumber(mData[0]),
+    quedaDeel: parseLocalNumber(mData[1]),
+    transferido: parseLocalNumber(mData[2]),
+    tc: parseLocalNumber(mData[3]),
+    recibidoArs: parseLocalNumber(mData[4]),
   };
 
   const oriana = {
-    salarioUsd: parseFloat(oData[0]) || 0,
-    quedaDeel: parseFloat(oData[1]) || 0,
-    transferido: parseFloat(oData[2]) || 0,
-    tc: parseFloat(oData[3]) || 0,
-    recibidoArs: parseFloat(oData[4]) || 0,
+    salarioUsd: parseLocalNumber(oData[0]),
+    quedaDeel: parseLocalNumber(oData[1]),
+    transferido: parseLocalNumber(oData[2]),
+    tc: parseLocalNumber(oData[3]),
+    recibidoArs: parseLocalNumber(oData[4]),
   };
 
-  // Sumar gastos del mes por moneda y metodo
+  // Sumar gastos del mes actual y tarjeta del mes anterior
   const rows = transRes.data.values || [];
   let gastadoArs = 0, gastadoUsd = 0, gastadoTarjeta = 0, gastadoLiquido = 0;
+  let tarjetaMesAnterior = 0;
+
+  // Mes anterior para calcular pago de tarjeta
+  const prevMonth = month > 1 ? month - 1 : 12;
+  const prevYear = month > 1 ? year : year - 1;
 
   for (const r of rows) {
     if (!r[0]) continue;
     const parts = r[0].split('/');
     if (parts.length !== 3) continue;
-    if (parseInt(parts[1]) !== month || parseInt(parts[2]) !== year) continue;
+    const rMonth = parseInt(parts[1]);
+    const rYear = parseInt(parts[2]);
 
-    const monto = parseFloat(r[4]) || 0;
+    // Tarjeta del mes anterior (se paga este mes)
+    if (rMonth === prevMonth && rYear === prevYear) {
+      if (r[5] !== 'USD' && esTarjeta(r[6])) {
+        tarjetaMesAnterior += parseLocalNumber(r[4]);
+      }
+      continue;
+    }
+
+    // Gastos del mes actual
+    if (rMonth !== month || rYear !== year) continue;
+
+    const monto = parseLocalNumber(r[4]);
     if (r[5] === 'USD') gastadoUsd += monto;
     else {
       gastadoArs += monto;
@@ -685,8 +702,8 @@ async function getFlowData(month, year) {
     }
   }
 
-  // Sobrante = ingresos - gastos liquidos (banco, efectivo, deel card).
-  // Los gastos con tarjeta de credito se pagan el mes siguiente, no salen del bolsillo ahora.
+  // Sobrante = ingresos - gastos liquidos - tarjeta mes anterior (pagada este mes).
+  // Los gastos con tarjeta de este mes se pagan el mes siguiente, no salen del bolsillo ahora.
   const totalIngresadoArs = moises.recibidoArs + oriana.recibidoArs;
 
   return {
@@ -697,7 +714,8 @@ async function getFlowData(month, year) {
     gastadoUsd,
     gastadoTarjeta,
     gastadoLiquido,
-    sobranteArs: totalIngresadoArs - gastadoLiquido,
+    tarjetaMesAnterior,
+    sobranteArs: totalIngresadoArs - gastadoLiquido - tarjetaMesAnterior,
     salarioTotalUsd: moises.salarioUsd + oriana.salarioUsd,
     transferidoTotal: moises.transferido + oriana.transferido,
     quedaDeelTotal: moises.quedaDeel + oriana.quedaDeel,

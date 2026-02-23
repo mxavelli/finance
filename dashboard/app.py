@@ -249,16 +249,16 @@ def render_resumen(mes, anio):
         label_gasto = 'Gastado ARS'
         gasto_sobrante = df_ars_liquido['monto'].sum()
 
-    # Restar inversiones (PPI) para que el sobrante refleje realidad
-    total_inversiones = 0
-    if usuario != 'Oriana':
-        try:
-            inv = cargar_inversiones()
-            total_inversiones = inv['total']
-        except Exception:
-            pass
+    # Tarjeta del mes anterior (se paga este mes, sale del banco)
+    prev_mes = mes - 1 if mes > 1 else 12
+    prev_anio = anio if mes > 1 else anio - 1
+    df_prev = filtrar_mes(cargar_transacciones(), prev_mes, prev_anio)
+    tarjeta_mes_anterior = 0
+    if not df_prev.empty:
+        df_prev_tarjeta = df_prev[(df_prev['moneda'] == 'ARS') & (df_prev['metodo_pago'].isin(metodos_tarjeta))]
+        tarjeta_mes_anterior = df_prev_tarjeta['monto'].sum()
 
-    sobrante = total_ingresos - gasto_sobrante - total_inversiones
+    sobrante = total_ingresos - gasto_sobrante - tarjeta_mes_anterior
 
     # Sobrante — lo más importante arriba
     if total_ingresos > 0:
@@ -269,9 +269,9 @@ def render_resumen(mes, anio):
         total_tarjeta = df_ars[df_ars['metodo_pago'].isin(metodos_tarjeta)]['monto'].sum() if not df_ars.empty else 0
         detalles = []
         if total_tarjeta > 0:
-            detalles.append(f'Tarjeta (pago mes prox): {formato_ars(total_tarjeta)}')
-        if total_inversiones > 0:
-            detalles.append(f'Inversiones descontadas: {formato_ars(total_inversiones)}')
+            detalles.append(f'Tarjeta este mes (pago mes prox): {formato_ars(total_tarjeta)}')
+        if tarjeta_mes_anterior > 0:
+            detalles.append(f'Tarjeta mes ant. (pagada ahora): {formato_ars(tarjeta_mes_anterior)}')
         if detalles:
             st.caption(' | '.join(detalles))
 
@@ -693,16 +693,16 @@ def render_flujo(mes, anio):
         df_liquido = df[(df['moneda'] == 'ARS') & (~df['metodo_pago'].isin(metodos_tarjeta))] if not df.empty else df
         gasto_sobrante = df_liquido['monto'].sum() if not df_liquido.empty else 0
 
-    # Restar inversiones (PPI) del sobrante
-    total_inversiones = 0
-    if usuario != 'Oriana':
-        try:
-            inv = cargar_inversiones()
-            total_inversiones = inv['total']
-        except Exception:
-            pass
+    # Tarjeta del mes anterior (se paga este mes, sale del banco)
+    prev_mes = mes - 1 if mes > 1 else 12
+    prev_anio = anio if mes > 1 else anio - 1
+    df_prev = filtrar_mes(cargar_transacciones(), prev_mes, prev_anio)
+    tarjeta_mes_anterior = 0
+    if not df_prev.empty:
+        df_prev_tarjeta = df_prev[(df_prev['moneda'] == 'ARS') & (df_prev['metodo_pago'].isin(metodos_tarjeta))]
+        tarjeta_mes_anterior = df_prev_tarjeta['monto'].sum()
 
-    sobrante_ars = total_ingresos_ars - gasto_sobrante - total_inversiones
+    sobrante_ars = total_ingresos_ars - gasto_sobrante - tarjeta_mes_anterior
     total_gastos_usd = df[df['moneda'] == 'USD']['monto'].sum() if not df.empty else 0
 
     # Sección ARS
@@ -750,9 +750,9 @@ def render_flujo(mes, anio):
     if not df.empty:
         tarj_total_flujo = df[(df['moneda'] == 'ARS') & (df['metodo_pago'].isin(metodos_tarjeta))]['monto'].sum()
         if tarj_total_flujo > 0:
-            detalles_flujo.append(f'Tarjeta (pago mes prox): {formato_ars(tarj_total_flujo)}')
-    if total_inversiones > 0:
-        detalles_flujo.append(f'Inversiones descontadas: {formato_ars(total_inversiones)}')
+            detalles_flujo.append(f'Tarjeta este mes (pago mes prox): {formato_ars(tarj_total_flujo)}')
+    if tarjeta_mes_anterior > 0:
+        detalles_flujo.append(f'Tarjeta mes ant. (pagada ahora): {formato_ars(tarjeta_mes_anterior)}')
     if detalles_flujo:
         st.caption(' | '.join(detalles_flujo))
 

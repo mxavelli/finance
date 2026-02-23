@@ -301,21 +301,26 @@ def cargar_ingresos_moises():
 
 @st.cache_data(ttl=300)
 def cargar_ingresos_oriana():
-    """Lee ingresos de Oriana: 12 meses."""
+    """Lee ingresos de Oriana: 12 meses (mismo layout que Moises)."""
     sheet = get_sheet()
     ws = sheet.worksheet('Ingresos')
     # Rows 19-30 = Ene-Dic, Row 31 = TOTAL
+    # Cols: A=Mes, B=Salario USD, C=Queda Deel, D=Transferido, E=TC, F=Recibido ARS
     data = ws.get('A19:F30', value_render_option='UNFORMATTED_VALUE')
     if not data:
-        return pd.DataFrame(columns=['mes', 'ingreso_ars', 'fuente'])
+        return pd.DataFrame(columns=['mes', 'salario_usd', 'queda_deel', 'transferido',
+                                     'tc', 'ingreso_ars'])
     rows = []
     for r in data[:12]:
         while len(r) < 6:
             r.append(None)
         rows.append({
             'mes': r[0] or '',
-            'ingreso_ars': _safe_float(r[1]),
-            'fuente': r[2] or '',
+            'salario_usd': _safe_float(r[1]),
+            'queda_deel': _safe_float(r[2]),
+            'transferido': _safe_float(r[3]),
+            'tc': _safe_float(r[4]),
+            'ingreso_ars': _safe_float(r[5]),
         })
     return pd.DataFrame(rows)
 

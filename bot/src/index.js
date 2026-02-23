@@ -521,12 +521,15 @@ async function cmdFlujo(ctx) {
       text += `  — Líquido (banco/efectivo/deel): ${fmtMonto(flow.gastadoLiquido, 'ARS')}\n`;
     }
     if (flow.gastadoTarjeta > 0) {
-      text += `  — Tarjeta (pago mes prox): ${fmtMonto(flow.gastadoTarjeta, 'ARS')}\n`;
+      text += `  — Tarjeta este mes (pago mes prox): ${fmtMonto(flow.gastadoTarjeta, 'ARS')}\n`;
+    }
+    if (flow.tarjetaMesAnterior > 0) {
+      text += `  — Tarjeta mes ant. (pagada ahora): ${fmtMonto(flow.tarjetaMesAnterior, 'ARS')}\n`;
     }
 
     if (tieneIngresos) {
       text += `*📊 Sobrante ARS:* ${fmtMonto(flow.sobranteArs, 'ARS')}\n`;
-      text += `  _Sobrante = ingresos - gastos líquidos_\n`;
+      text += `  _Sobrante = ingresos - líquido - tarjeta mes ant._\n`;
     }
 
     // Sección USD
