@@ -668,7 +668,7 @@ async function getFlowData(month, year) {
 
   // Sumar gastos del mes por moneda y metodo
   const rows = transRes.data.values || [];
-  let gastadoArs = 0, gastadoUsd = 0, gastadoTarjeta = 0;
+  let gastadoArs = 0, gastadoUsd = 0, gastadoTarjeta = 0, gastadoLiquido = 0;
 
   for (const r of rows) {
     if (!r[0]) continue;
@@ -678,18 +678,26 @@ async function getFlowData(month, year) {
 
     const monto = parseFloat(r[4]) || 0;
     if (r[5] === 'USD') gastadoUsd += monto;
-    else gastadoArs += monto;
-    if (esTarjeta(r[6])) gastadoTarjeta += monto;
+    else {
+      gastadoArs += monto;
+      if (esTarjeta(r[6])) gastadoTarjeta += monto;
+      else gastadoLiquido += monto;
+    }
   }
+
+  // Sobrante = ingresos - gastos liquidos (banco, efectivo, deel card).
+  // Los gastos con tarjeta de credito se pagan el mes siguiente, no salen del bolsillo ahora.
+  const totalIngresadoArs = moises.recibidoArs + oriana.recibidoArs;
 
   return {
     moises,
     oriana,
-    totalIngresadoArs: moises.recibidoArs + oriana.recibidoArs,
+    totalIngresadoArs,
     gastadoArs,
     gastadoUsd,
     gastadoTarjeta,
-    sobranteArs: (moises.recibidoArs + oriana.recibidoArs) - gastadoArs,
+    gastadoLiquido,
+    sobranteArs: totalIngresadoArs - gastadoLiquido,
     salarioTotalUsd: moises.salarioUsd + oriana.salarioUsd,
     transferidoTotal: moises.transferido + oriana.transferido,
     quedaDeelTotal: moises.quedaDeel + oriana.quedaDeel,

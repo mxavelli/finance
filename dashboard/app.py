@@ -221,6 +221,10 @@ def render_resumen(mes, anio):
     queda_deel = ing_m.iloc[idx]['queda_deel'] if idx < len(ing_m) else 0
     ingreso_o_ars = ing_o.iloc[idx]['ingreso_ars'] if idx < len(ing_o) else 0
 
+    # Gastos con tarjeta no salen del bolsillo este mes (se pagan el mes siguiente)
+    metodos_tarjeta = ['Visa Galicia', 'Master Galicia', 'Visa BBVA', 'Master BBVA', 'Tarjeta']
+    df_ars_liquido = df_ars[~df_ars['metodo_pago'].isin(metodos_tarjeta)]
+
     # Filtrar según usuario seleccionado
     if usuario == 'Moises':
         total_ars = df_ars['monto_moises'].sum()
@@ -228,22 +232,22 @@ def render_resumen(mes, anio):
         total_ingresos = ingreso_m_ars
         label_ingreso = 'Ingreso Moises'
         label_gasto = 'Gastado Moises'
-        # Sobrante: usar monto total porque el ingreso de Moises financia el hogar
-        gasto_sobrante = df_ars['monto'].sum()
+        # Sobrante: solo gastos líquidos (banco/efectivo/deel), monto total porque Moises financia el hogar
+        gasto_sobrante = df_ars_liquido['monto'].sum()
     elif usuario == 'Oriana':
         total_ars = df_ars['monto_oriana'].sum()
         total_usd = 0
         total_ingresos = ingreso_o_ars
         label_ingreso = 'Ingreso Oriana'
         label_gasto = 'Gastado Oriana'
-        gasto_sobrante = total_ars
+        gasto_sobrante = df_ars_liquido['monto_oriana'].sum()
     else:
         total_ars = df_ars['monto'].sum()
         total_usd = df_usd['monto'].sum()
         total_ingresos = ingreso_m_ars + ingreso_o_ars
         label_ingreso = 'Ingresos ARS'
         label_gasto = 'Gastado ARS'
-        gasto_sobrante = total_ars
+        gasto_sobrante = df_ars_liquido['monto'].sum()
 
     # Restar inversiones (PPI) para que el sobrante refleje realidad
     total_inversiones = 0
@@ -262,8 +266,14 @@ def render_resumen(mes, anio):
         color = 'normal' if sobrante >= 0 else 'inverse'
         st.metric('Sobrante ARS', formato_ars(sobrante),
                   delta=f'{pct:.0f}% del ingreso', delta_color=color)
+        total_tarjeta = df_ars[df_ars['metodo_pago'].isin(metodos_tarjeta)]['monto'].sum() if not df_ars.empty else 0
+        detalles = []
+        if total_tarjeta > 0:
+            detalles.append(f'Tarjeta (pago mes prox): {formato_ars(total_tarjeta)}')
         if total_inversiones > 0:
-            st.caption(f'Inversiones descontadas: {formato_ars(total_inversiones)}')
+            detalles.append(f'Inversiones descontadas: {formato_ars(total_inversiones)}')
+        if detalles:
+            st.caption(' | '.join(detalles))
 
     # Métricas principales
     c1, c2 = st.columns(2)
@@ -662,20 +672,26 @@ def render_flujo(mes, anio):
     if idx < len(ing_o):
         ingreso_o = ing_o.iloc[idx]['ingreso_ars']
 
+    # Gastos con tarjeta no salen del bolsillo este mes (se pagan el mes siguiente)
+    metodos_tarjeta = ['Visa Galicia', 'Master Galicia', 'Visa BBVA', 'Master BBVA', 'Tarjeta']
+
     # Calcular según usuario
     if usuario == 'Moises':
         total_ingresos_ars = recibido_m
         total_gastos_ars = df[df['moneda'] == 'ARS'][col_monto].sum() if not df.empty else 0
-        # Sobrante: usar monto total porque el ingreso de Moises financia el hogar
-        gasto_sobrante = df[df['moneda'] == 'ARS']['monto'].sum() if not df.empty else 0
+        # Sobrante: solo gastos líquidos, monto total porque Moises financia el hogar
+        df_liquido = df[(df['moneda'] == 'ARS') & (~df['metodo_pago'].isin(metodos_tarjeta))] if not df.empty else df
+        gasto_sobrante = df_liquido['monto'].sum() if not df_liquido.empty else 0
     elif usuario == 'Oriana':
         total_ingresos_ars = ingreso_o
         total_gastos_ars = df[df['moneda'] == 'ARS'][col_monto].sum() if not df.empty else 0
-        gasto_sobrante = total_gastos_ars
+        df_liquido = df[(df['moneda'] == 'ARS') & (~df['metodo_pago'].isin(metodos_tarjeta))] if not df.empty else df
+        gasto_sobrante = df_liquido[col_monto].sum() if not df_liquido.empty else 0
     else:
         total_ingresos_ars = recibido_m + ingreso_o
         total_gastos_ars = df[df['moneda'] == 'ARS']['monto'].sum() if not df.empty else 0
-        gasto_sobrante = total_gastos_ars
+        df_liquido = df[(df['moneda'] == 'ARS') & (~df['metodo_pago'].isin(metodos_tarjeta))] if not df.empty else df
+        gasto_sobrante = df_liquido['monto'].sum() if not df_liquido.empty else 0
 
     # Restar inversiones (PPI) del sobrante
     total_inversiones = 0
@@ -730,8 +746,15 @@ def render_flujo(mes, anio):
     st.metric('Sobrante ARS', formato_ars(sobrante_ars),
               delta=f'{sobrante_ars / total_ingresos_ars * 100:.0f}% del ingreso' if total_ingresos_ars > 0 else None,
               delta_color=color_sobrante)
+    detalles_flujo = []
+    if not df.empty:
+        tarj_total_flujo = df[(df['moneda'] == 'ARS') & (df['metodo_pago'].isin(metodos_tarjeta))]['monto'].sum()
+        if tarj_total_flujo > 0:
+            detalles_flujo.append(f'Tarjeta (pago mes prox): {formato_ars(tarj_total_flujo)}')
     if total_inversiones > 0:
-        st.caption(f'Inversiones descontadas: {formato_ars(total_inversiones)}')
+        detalles_flujo.append(f'Inversiones descontadas: {formato_ars(total_inversiones)}')
+    if detalles_flujo:
+        st.caption(' | '.join(detalles_flujo))
 
     # Sección USD (solo Moises o Todos)
     if usuario != 'Oriana':
