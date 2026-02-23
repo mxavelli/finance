@@ -703,10 +703,11 @@ async function getFlowData(month, year) {
 
   const totalIngresadoArs = moises.recibidoArs + oriana.recibidoArs;
 
-  // Sobrante = saldo_anterior + (ingresos + otros_ingresos) - gastos_banco_efectivo - pagos_tc
+  // Sobrante = saldo_anterior + ingresos_moises + otros_ingresos - gastos_banco_efectivo - pagos_tc
+  // Solo ingresos de Moises porque los pagos TC son de su cuenta bancaria
   // Excluir Deel Card de gastos líquidos (viene de USD, no de ARS del banco)
   const gastoBancoEfectivo = gastadoLiquido - gastadoDeelCard;
-  const sobranteArs = pagosTC.saldoInicial + totalIngresadoArs + pagosTC.otrosIngresos
+  const sobranteArs = pagosTC.saldoInicial + moises.recibidoArs + pagosTC.otrosIngresos
                     - gastoBancoEfectivo - pagosTC.totalPagosTC;
 
   return {

@@ -225,17 +225,19 @@ def render_resumen(mes, anio):
     metodos_tarjeta = ['Visa Galicia', 'Master Galicia', 'Visa BBVA', 'Master BBVA', 'Tarjeta']
     df_ars_liquido = df_ars[~df_ars['metodo_pago'].isin(metodos_tarjeta)]
 
-    # Pagos TC reales y otros ingresos
-    ptc = cargar_pagos_tc()
-    ptc_mes = ptc['meses']
+    # Pagos TC reales y otros ingresos (solo aplica para Moises — son datos de su banco)
     pagos_tc = 0
     otros_ingresos = 0
-    if not ptc_mes.empty and mes <= len(ptc_mes):
-        row_tc = ptc_mes[ptc_mes['mes_num'] == mes]
-        if not row_tc.empty:
-            pagos_tc = row_tc.iloc[0]['total_pagos_tc']
-            otros_ingresos = row_tc.iloc[0]['otros_ingresos']
-    saldo_inicial = ptc.get('saldo_inicial', 0)
+    saldo_inicial = 0
+    if usuario == 'Moises':
+        ptc = cargar_pagos_tc()
+        ptc_mes = ptc['meses']
+        if not ptc_mes.empty and mes <= len(ptc_mes):
+            row_tc = ptc_mes[ptc_mes['mes_num'] == mes]
+            if not row_tc.empty:
+                pagos_tc = row_tc.iloc[0]['total_pagos_tc']
+                otros_ingresos = row_tc.iloc[0]['otros_ingresos']
+        saldo_inicial = ptc.get('saldo_inicial', 0)
 
     # Filtrar según usuario seleccionado
     if usuario == 'Moises':
@@ -261,7 +263,7 @@ def render_resumen(mes, anio):
         label_gasto = 'Gastado ARS'
         gasto_banco_efectivo = df_ars_liquido[df_ars_liquido['metodo_pago'] != 'Deel Card']['monto'].sum()
 
-    # Sobrante = saldo_anterior + ingresos + otros_ingresos - gastos_banco_efectivo - pagos_tc
+    # Sobrante: para Moises usa pagos TC reales, para el resto solo ingresos - gastos
     sobrante = saldo_inicial + total_ingresos + otros_ingresos - gasto_banco_efectivo - pagos_tc
 
     # Sobrante — lo más importante arriba
@@ -679,17 +681,19 @@ def render_flujo(mes, anio):
     # Gastos con tarjeta no salen del bolsillo este mes (se pagan el mes siguiente)
     metodos_tarjeta = ['Visa Galicia', 'Master Galicia', 'Visa BBVA', 'Master BBVA', 'Tarjeta']
 
-    # Pagos TC reales y otros ingresos
-    ptc = cargar_pagos_tc()
-    ptc_mes = ptc['meses']
+    # Pagos TC reales y otros ingresos (solo aplica para Moises — son datos de su banco)
     pagos_tc = 0
     otros_ingresos = 0
-    if not ptc_mes.empty and mes <= len(ptc_mes):
-        row_tc = ptc_mes[ptc_mes['mes_num'] == mes]
-        if not row_tc.empty:
-            pagos_tc = row_tc.iloc[0]['total_pagos_tc']
-            otros_ingresos = row_tc.iloc[0]['otros_ingresos']
-    saldo_inicial = ptc.get('saldo_inicial', 0)
+    saldo_inicial = 0
+    if usuario == 'Moises':
+        ptc = cargar_pagos_tc()
+        ptc_mes = ptc['meses']
+        if not ptc_mes.empty and mes <= len(ptc_mes):
+            row_tc = ptc_mes[ptc_mes['mes_num'] == mes]
+            if not row_tc.empty:
+                pagos_tc = row_tc.iloc[0]['total_pagos_tc']
+                otros_ingresos = row_tc.iloc[0]['otros_ingresos']
+        saldo_inicial = ptc.get('saldo_inicial', 0)
 
     # Calcular según usuario
     if usuario == 'Moises':
