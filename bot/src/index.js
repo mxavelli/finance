@@ -14,7 +14,7 @@ const {
   registrarPagoTC, registrarOtrosIngresos,
 } = require('./sheets');
 const { getCategories } = require('./categories');
-const { parseTransaction, formatAmount, wordsToNumber } = require('./parser');
+const { parseTransaction, formatAmount, wordsToNumber, cleanTranscription } = require('./parser');
 const { startScheduler } = require('./scheduler');
 const { transcribeAudio, analyzeReceipt, isConfigured: isAiConfigured } = require('./ai');
 
@@ -1324,8 +1324,9 @@ bot.on('message:voice', async (ctx) => {
       return ctx.reply('No pude entender el audio. Intentá de nuevo o escribí el gasto.');
     }
 
-    // Convertir palabras numéricas a dígitos y mostrar transcripción
-    const processed = wordsToNumber(transcription);
+    // Convertir palabras numéricas a dígitos, limpiar relleno, mostrar transcripción
+    const withNumbers = wordsToNumber(transcription);
+    const processed = cleanTranscription(withNumbers);
     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `🎙️ Entendí: _${processed}_`, { parse_mode: 'Markdown' });
 
     // Parsear como transacción

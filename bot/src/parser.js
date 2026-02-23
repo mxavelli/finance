@@ -29,21 +29,42 @@ function getNow() {
 }
 
 // Parsea un monto de texto a numero.
-// Soporta: "3500", "15.000" (punto = miles), "1500,50" (coma = decimal).
+// Soporta: "3500", "15.000" (punto = miles), "1500,50" (coma = decimal), "$6.000".
 function parseAmount(token) {
+  // Quitar simbolos de moneda: $, US$, ARS, USD
+  const clean = token.replace(/^(?:us\$|\$|ars|usd)\s*/i, '');
+  if (!clean) return null;
+
   // Punto como separador de miles: "15.000", "1.500.000"
-  if (/^\d{1,3}(\.\d{3})+$/.test(token)) {
-    return parseFloat(token.replace(/\./g, ''));
+  if (/^\d{1,3}(\.\d{3})+$/.test(clean)) {
+    return parseFloat(clean.replace(/\./g, ''));
   }
   // Coma como decimal: "1500,50"
-  if (/^\d+,\d+$/.test(token)) {
-    return parseFloat(token.replace(',', '.'));
+  if (/^\d+,\d+$/.test(clean)) {
+    return parseFloat(clean.replace(',', '.'));
   }
   // Numero simple: "3500"
-  if (/^\d+$/.test(token)) {
-    return parseFloat(token);
+  if (/^\d+$/.test(clean)) {
+    return parseFloat(clean);
   }
   return null;
+}
+
+// Limpia texto transcrito de audio: quita palabras de relleno comunes en habla natural.
+// "compré un café en la tienda por 6000" → "café tienda 6000"
+const FILLER_WORDS = new Set([
+  'compre', 'compré', 'gaste', 'gasté', 'pague', 'pagué', 'fue', 'eran', 'era',
+  'un', 'una', 'uno', 'unos', 'unas', 'el', 'la', 'los', 'las',
+  'en', 'por', 'de', 'del', 'al', 'con', 'para', 'que', 'me', 'se', 'le',
+  'hoy', 'ayer', 'recien', 'recién', 'algo', 'como', 'asi', 'más', 'mas',
+  'y', 'o', 'a', 'mi', 'su', 'nos',
+  'pesos', 'peso',
+]);
+
+function cleanTranscription(text) {
+  const tokens = text.split(/\s+/);
+  const cleaned = tokens.filter(t => !FILLER_WORDS.has(normalize(t)));
+  return cleaned.join(' ');
 }
 
 // Convierte numeros en palabras (español) a digitos.
@@ -51,7 +72,7 @@ function parseAmount(token) {
 // Los tokens que ya son numeros pasan sin cambio.
 function wordsToNumber(text) {
   const UNITS = {
-    cero: 0, un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5,
+    cero: 0, dos: 2, tres: 3, cuatro: 4, cinco: 5,
     seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10, once: 11, doce: 12,
     trece: 13, catorce: 14, quince: 15, dieciseis: 16, diecisiete: 17,
     dieciocho: 18, diecinueve: 19, veinte: 20, veintiun: 21, veintiuno: 21,
@@ -348,4 +369,4 @@ function parseTransaction(text, senderId, categories, config) {
   };
 }
 
-module.exports = { parseTransaction, formatAmount, wordsToNumber };
+module.exports = { parseTransaction, formatAmount, wordsToNumber, cleanTranscription };
