@@ -387,7 +387,8 @@ Al iniciar el bot, si las env vars de ingresos están configuradas y el mes actu
 
 1. Usuario envía `/flujo` o `/flujo febrero`
 2. Bot lee datos de Ingresos (ambos) + suma transacciones del mes
-3. Muestra: ingresos ARS (Moises + Oriana), gastos ARS (con desglose Tarjeta), sobrante ARS, y sección USD (salario, transferido, gastado, queda en Deel)
+3. Muestra: ingresos ARS (Moises + Oriana), gastos ARS (con desglose Tarjeta este mes y tarjeta mes anterior), sobrante ARS, y sección USD (salario, transferido, gastado, queda en Deel)
+4. Fórmula sobrante: `ingresos - gastos líquidos - tarjeta mes anterior`. Los gastos con tarjeta de ESTE mes no se restan (se pagan el mes siguiente). Los gastos con tarjeta del mes ANTERIOR sí se restan (se pagan ahora). Inversiones PPI NO se restan por separado (ya están incluidas como transacción Banco si se transfirió dinero).
 
 ### Flujo de /tarjeta
 
