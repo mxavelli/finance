@@ -735,7 +735,7 @@ async function getPresupuestos() {
   const [arsRes, usdRes] = await Promise.all([
     sheets.spreadsheets.values.get({
       spreadsheetId: config.sheetId,
-      range: 'Presupuesto ARS!A5:B45',
+      range: "'Presupuesto ARS'!A5:B55",
       valueRenderOption: 'UNFORMATTED_VALUE',
     }),
     sheets.spreadsheets.values.get({
@@ -749,16 +749,17 @@ async function getPresupuestos() {
   const arsRows = arsRes.data.values || [];
   const usdRows = usdRes.data.values || [];
 
-  // ARS: indices 0-10 = Moises, 15-25 = Oriana, 30-40 = Compartido
-  // (indices 11-14 y 26-29 son TOTAL, blank, título, header → se filtran por valor)
+  // ARS: 13 categorías por sección (11 originales + Seguros + Impuestos)
+  // indices 0-12 = Moises, 17-29 = Oriana, 34-46 = Compartido
+  // (entre secciones: TOTAL, blank, título, header)
   const sections = [
     { offset: 0, tipo: 'Individual Moises' },
-    { offset: 15, tipo: 'Individual Oriana' },
-    { offset: 30, tipo: 'Compartido' },
+    { offset: 17, tipo: 'Individual Oriana' },
+    { offset: 34, tipo: 'Compartido' },
   ];
 
   for (const sec of sections) {
-    for (let i = 0; i < 11; i++) {
+    for (let i = 0; i < 13; i++) {
       const row = arsRows[sec.offset + i];
       if (!row || !row[0]) continue;
       const categoria = String(row[0]).trim();
@@ -1259,15 +1260,15 @@ async function setupEstilos() {
   }
 
   // ============================================================
-  // 4. PRESUPUESTO ARS (3 secciones, cada una: titulo + header + 11 cats + total = ~14 filas)
+  // 4. PRESUPUESTO ARS (3 secciones, cada una: titulo + header + 13 cats + total)
   // ============================================================
   const pArs = sheetMap['Presupuesto ARS'];
   if (pArs !== undefined) {
     // Año en fila 1
     requests.push(textFmt(pArs, 0, 1, 0, 2, { bold: true, color: C.headerDark, fontSize: 12 }));
 
-    // 3 secciones: empiezan en filas 3, ~18, ~33 (fila 3 + 15*n)
-    const secStarts = [2, 17, 32]; // 0-indexed: filas 3, 18, 33
+    // 3 secciones: filas 3, 20, 37 (0-indexed: 2, 19, 36)
+    const secStarts = [2, 19, 36];
     const secColors = [C.headerDark, C.headerMed, { red: 0.45, green: 0.25, blue: 0.65 }]; // azul, azul medio, morado
 
     for (let s = 0; s < 3; s++) {
@@ -1279,11 +1280,11 @@ async function setupEstilos() {
       // Headers columnas
       requests.push(bgColor(pArs, start + 1, start + 2, 0, 16, color));
       requests.push(textFmt(pArs, start + 1, start + 2, 0, 16, { bold: true, color: C.white, hAlign: 'CENTER' }));
-      // Alternating rows (11 categorias)
-      requests.push(...altRows(pArs, start + 2, start + 13, 16));
+      // Alternating rows (13 categorias)
+      requests.push(...altRows(pArs, start + 2, start + 15, 16));
       // Total
-      requests.push(bgColor(pArs, start + 13, start + 14, 0, 16, C.totalBg));
-      requests.push(textFmt(pArs, start + 13, start + 14, 0, 16, { bold: true }));
+      requests.push(bgColor(pArs, start + 15, start + 16, 0, 16, C.totalBg));
+      requests.push(textFmt(pArs, start + 15, start + 16, 0, 16, { bold: true }));
     }
 
     requests.push(colWidth(pArs, 0, 160)); // Categoria
@@ -1547,14 +1548,14 @@ async function setupEstilosDark() {
   }
 
   // ============================================================
-  // 3. PRESUPUESTO ARS
+  // 3. PRESUPUESTO ARS (3 secciones, 13 categorías cada una)
   // ============================================================
   const pArs = sheetMap['Presupuesto ARS'];
   if (pArs !== undefined) {
-    requests.push(bgColor(pArs, 0, 50, 0, 16, D.bg));
-    requests.push(textFmt(pArs, 0, 50, 0, 16, { color: D.text }));
+    requests.push(bgColor(pArs, 0, 55, 0, 16, D.bg));
+    requests.push(textFmt(pArs, 0, 55, 0, 16, { color: D.text }));
     requests.push(textFmt(pArs, 0, 1, 0, 2, { bold: true, color: D.white, fontSize: 12 }));
-    const secStarts = [2, 17, 32];
+    const secStarts = [2, 19, 36];
     const secColors = [D.headerDark, D.headerMed, { red: 0.30, green: 0.15, blue: 0.50 }];
     for (let s = 0; s < 3; s++) {
       const start = secStarts[s];
@@ -1562,9 +1563,9 @@ async function setupEstilosDark() {
       requests.push(textFmt(pArs, start, start + 1, 0, 16, { bold: true, color: secColors[s] === D.headerDark ? D.white : D.purple, hAlign: 'CENTER' }));
       requests.push(bgColor(pArs, start + 1, start + 2, 0, 16, secColors[s]));
       requests.push(textFmt(pArs, start + 1, start + 2, 0, 16, { bold: true, color: D.white, hAlign: 'CENTER' }));
-      requests.push(...altRowsDark(pArs, start + 2, start + 13, 16));
-      requests.push(bgColor(pArs, start + 13, start + 14, 0, 16, D.totalBg));
-      requests.push(textFmt(pArs, start + 13, start + 14, 0, 16, { bold: true, color: D.white }));
+      requests.push(...altRowsDark(pArs, start + 2, start + 15, 16));
+      requests.push(bgColor(pArs, start + 15, start + 16, 0, 16, D.totalBg));
+      requests.push(textFmt(pArs, start + 15, start + 16, 0, 16, { bold: true, color: D.white }));
     }
   }
 
@@ -2115,16 +2116,16 @@ async function setupFormatos() {
     requests.push(fmt(gfId, 1, 102, 2, 3, '#,##0'));
   }
 
-  // 3. Presupuesto ARS — 3 secciones
-  // Estructura: titulo, header, 11 categorías, total (cada sección = 15 filas empezando fila 3, 18, 33)
+  // 3. Presupuesto ARS — 3 secciones (13 categorías + total cada una)
+  // Filas de datos: 5-18, 22-35, 39-52 (0-indexed: 4-17, 21-34, 38-51)
   const pArsId = sheetMap['Presupuesto ARS'];
   if (pArsId !== undefined) {
-    const secStarts = [4, 19, 34]; // 0-indexed: filas de datos (después de titulo+header)
+    const secStarts = [4, 21, 38]; // 0-indexed: filas de datos (después de titulo+header)
     for (const start of secStarts) {
-      // Cols B-O (index 1-14): Presup + 12 meses + Total → #,##0
-      requests.push(fmt(pArsId, start, start + 12, 1, 15, '#,##0'));
+      // Cols B-O (index 1-14): Presup + 12 meses + Total → #,##0 (13 cats + total = 14 filas)
+      requests.push(fmt(pArsId, start, start + 14, 1, 15, '#,##0'));
       // Col P (index 15): % → 0%
-      requests.push(fmt(pArsId, start, start + 12, 15, 16, '0%'));
+      requests.push(fmt(pArsId, start, start + 14, 15, 16, '0%'));
     }
   }
 
