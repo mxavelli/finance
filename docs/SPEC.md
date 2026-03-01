@@ -113,6 +113,11 @@ El salario llega en USD a Deel y se distribuye en 3 bolsillos:
 | Portafolio Inversiones | Hoja "Inversiones" (11a) con portafolio de inversiones en PPI (Acciones, CEDEARs, FCIs). Valor total + composición porcentual, actualización manual. Comando /inversiones muestra total y composición, permite actualizar valor total y porcentajes. Historial de valor con variación calculada. Dashboard con sección Inversiones + integración en Ahorro | 2026-02-22 |
 | Presupuesto USD Oriana | Sección "ORIANA (USD)" agregada a hoja Presupuesto USD. Misma estructura que Moises: categorías con SUMIFS filtrando por "Individual Oriana"+"USD". getPresupuestos() parsea ambas secciones dinámicamente | 2026-03-01 |
 | Menú persistente | ReplyKeyboard de grammY con 12 botones (Registrar, Balance, Resumen, Tarjeta, Últimas, Cuotas, Flujo, Borrar, Saldar, Crypto, Inversiones, Ayuda). `is_persistent: true`, se envía en /start y en "no pude interpretar". Handlers extraídos como funciones nombradas reutilizables. Registro por lenguaje natural se mantiene intacto | 2026-02-22 |
+| Alertas ahorro invertidas | Categorías positivas (`CATEGORIAS_POSITIVAS = ['Ahorro / Inversión']`) excluidas de alertas de exceso. Lógica invertida: alerta cuando ahorro < 80% de meta (día 25+). Cron diario 20:00 BA. Resumen semanal diferencia ahorro (📈/📉/✅) de gasto (🟡/🔴) | 2026-03-01 |
+| Batch write gastos fijos | `appendTransactionsBatch()` y `updateCuotasRegistradasBatch()` en sheets.js: una sola llamada API para N transacciones. Evita rate limit de Google Sheets (60 writes/min). 56 items pasó de ~112 calls a 2 calls | 2026-03-01 |
+| Pagado por en Gastos Fijos | Columna K "Pagado por" (Moises/Oriana) en hoja Gastos Fijos. Refleja quién paga físicamente cada gasto compartido. `fijos_ok` usa este valor en vez de derivar del userId. Corrige Balance Compartido | 2026-03-01 |
+| Dashboard auto-update | B4 usa `=MONTH(TODAY())`, B5 usa `=YEAR(TODAY())`. Ambos tienen dropdown: meses 1-12, años 2026-2035. Se actualizan solos pero el usuario puede seleccionar otro mes/año | 2026-03-01 |
+| Presupuesto Oriana | Budget agresivo de ahorro cargado en Presupuesto ARS (Individual Oriana) y Presupuesto USD (Individual Oriana). Ingresos: $2.025.000 ARS + $800 USD | 2026-03-01 |
 
 ---
 
@@ -182,7 +187,7 @@ El salario llega en USD a Deel y se distribuye en 3 bolsillos:
 1. **Dashboard** — Resumen visual con selectores de mes/año (fórmulas se agregan vía Sheets API en Fase 4)
 2. **Transacciones** — Registro central (el bot escribe acá)
 3. **Presupuesto ARS** — 3 secciones (Moises, Oriana, Compartido) con SUMIFS por mes
-4. **Presupuesto USD** — 1 sección (Moises) con SUMIFS por mes
+4. **Presupuesto USD** — 2 secciones (Moises y Oriana) con SUMIFS por mes
 5. **Balance Compartido** — Quién pagó vs quién le corresponde, saldo acumulado
 6. **Gastos Fijos** — Recurrentes con verificación automática (COUNTIFS)
 7. **Ingresos** — Moises (USD + distribución) y Oriana (ARS)
@@ -302,7 +307,19 @@ Por cada mes calcula:
 
 ### Gastos Fijos
 
-Columna "¿Registrado este mes?" usa COUNTIFS con wildcard para buscar transacciones cuya descripción contenga el nombre del gasto fijo en el mes actual.
+| Columna | Campo | Notas |
+|---------|-------|-------|
+| A | Descripción | Nombre del gasto |
+| B | Categoría | Dropdown |
+| C | Monto Estimado | Monto mensual |
+| D | Moneda | ARS / USD |
+| E | Método de pago | Dropdown |
+| F | Tipo | Individual Moises / Individual Oriana / Compartido |
+| G | Día | Día del mes (1-28) para auto-registro |
+| H | ¿Registrado? | Fórmula COUNTIFS — wildcard busca descripción en Transacciones del mes |
+| I | Frecuencia | Mensual / Trimestral / Anual |
+| J | Meses | Números separados por coma (para Trimestral/Anual) |
+| K | Pagado por | Moises / Oriana — quién paga físicamente. Usado en Balance Compartido |
 
 ### Named Ranges (para la API del bot — se crean en Fase 4)
 
@@ -458,12 +475,21 @@ Todos los días a las 9:00 AM Buenos Aires, el bot revisa si hay gastos fijos co
 Se disparan al registrar cada gasto (no por cron). Después de guardar una transacción:
 
 1. Lee presupuestos con `getPresupuestos()` (Map: `"categoria|tipo|moneda"` → monto)
-2. Suma transacciones del mes para esa categoría+tipo+moneda
-3. Si supera 80% → alerta 🟡. Si supera 100% → alerta 🔴
-4. `budgetAlertsSent` Map evita alertas repetidas (key: `"cat|tipo|moneda|mes|año|umbral"`)
-5. Se limpia al inicio de cada mes (cron `0 0 1 * *`)
+2. **Excluye categorías positivas** (`CATEGORIAS_POSITIVAS = ['Ahorro / Inversión']`) — estas tienen lógica invertida (ver alerta de ahorro)
+3. Suma transacciones del mes para esa categoría+tipo+moneda
+4. Si supera 80% → alerta 🟡. Si supera 100% → alerta 🔴
+5. `budgetAlertsSent` Map evita alertas repetidas (key: `"cat|tipo|moneda|mes|año|umbral"`)
+6. Se limpia al inicio de cada mes (cron `0 0 1 * *`)
 
 Puntos de integración: después de `appendTransaction()` en tx normal, selección de tarjeta, y registro batch de gastos fijos.
+
+### Alerta de ahorro bajo (scheduler)
+
+Del día 25 en adelante, `checkSavingsAlert()` revisa categorías positivas (`Ahorro / Inversión`) contra su presupuesto. Si están por debajo del 80% de la meta → alerta 📉 con progreso y días restantes. Una vez por mes por categoría (deduplicado con `budgetAlertsSent`).
+
+Destinatario según tipo: "moises" → Moises, "oriana" → Oriana, ambiguo → ambos.
+
+El resumen semanal también diferencia categorías positivas: ✅ (≥100%), 📈 (≥80%), 📉 (<80%) vs las de gasto: 🔴 (≥100%), 🟡 (≥80%).
 
 Destinatario según tipo de gasto:
 - Individual Moises → alerta a Moises
@@ -489,8 +515,9 @@ Edge case: si estamos en los primeros 7 días del mes, también carga transaccio
 startScheduler(bot, ctx)
 ├── setTimeout checkIncomeReminder (3s)
 ├── setTimeout checkFixedExpensesReminder (5s)
-├── cron '0 9 * * *'   → checkDailyAutoFijos (diario)
-├── cron '0 9 * * 1'   → sendWeeklySummary (lunes)
+├── cron '0 9 * * *'   → checkDailyAutoFijos (diario 9AM)
+├── cron '0 20 * * *'  → checkSavingsAlert (diario 8PM, día 25+)
+├── cron '0 9 * * 1'   → sendWeeklySummary (lunes 9AM)
 └── cron '0 0 1 * *'   → limpiar budgetAlertsSent (mensual)
 ```
 
@@ -687,7 +714,7 @@ El prompt incluye las tarjetas específicas: "Visa Galicia, Master Galicia, Deel
 
 ## Próximos pasos al retomar
 
-- **Fase 7: Refinamiento** — En progreso. Ya implementados: `/tarjeta`, `/registrar_fijos`, recordatorio gastos fijos, tarjetas de crédito específicas, cuotas de tarjeta, rangos expandidos, parsing locale, filtros robustos, auto-fijos diario, alertas de presupuesto, resumen semanal
+- **Fase 7: Refinamiento** — En progreso. Ya implementados: `/tarjeta`, `/registrar_fijos`, recordatorio gastos fijos, tarjetas de crédito específicas, cuotas de tarjeta, rangos expandidos, parsing locale, filtros robustos, auto-fijos diario, alertas de presupuesto, resumen semanal, alertas de ahorro invertidas, batch write para gastos fijos, "Pagado por" en Gastos Fijos, Dashboard auto-update con dropdowns
 - **Fase 8: Dashboard Streamlit** — Funcionando en Streamlit Community Cloud con viewer auth
 - **Fase 9: IA unificada** — Texto, audio y fotos, todo procesado con GPT-4o-mini. Requiere OPENAI_API_KEY.
 - Ideas pendientes: export, más ideas del usuario
