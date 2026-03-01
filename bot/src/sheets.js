@@ -1295,6 +1295,9 @@ async function setupEstilos() {
   // ============================================================
   const pUsd = sheetMap['Presupuesto USD'];
   if (pUsd !== undefined) {
+    // Limpiar fondo de toda la hoja
+    requests.push(bgColor(pUsd, 0, 35, 0, 16, C.white));
+    requests.push(textFmt(pUsd, 0, 35, 0, 16, { color: C.darkText }));
     requests.push(textFmt(pUsd, 0, 1, 0, 2, { bold: true, color: C.headerDark, fontSize: 12 }));
     // Sección Moises (filas 3-16, 0-indexed: 2-15)
     requests.push(bgColor(pUsd, 2, 3, 0, 16, C.sectionBg));
@@ -1306,8 +1309,8 @@ async function setupEstilos() {
     requests.push(textFmt(pUsd, 15, 16, 0, 16, { bold: true }));
     // Sección Oriana (filas 18-31, 0-indexed: 17-30)
     requests.push(bgColor(pUsd, 17, 18, 0, 16, C.sectionBg));
-    requests.push(textFmt(pUsd, 17, 18, 0, 16, { bold: true, color: C.green, hAlign: 'CENTER' }));
-    requests.push(bgColor(pUsd, 18, 19, 0, 16, C.green));
+    requests.push(textFmt(pUsd, 17, 18, 0, 16, { bold: true, color: C.headerMed, hAlign: 'CENTER' }));
+    requests.push(bgColor(pUsd, 18, 19, 0, 16, C.headerMed));
     requests.push(textFmt(pUsd, 18, 19, 0, 16, { bold: true, color: C.white, hAlign: 'CENTER' }));
     requests.push(...altRows(pUsd, 19, 30, 16));
     requests.push(bgColor(pUsd, 30, 31, 0, 16, C.totalBg));
