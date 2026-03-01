@@ -729,7 +729,7 @@ async function getFlowData(month, year) {
   };
 }
 
-// Lee presupuestos mensuales por categoría de Presupuesto ARS (3 secciones) y USD (1 sección).
+// Lee presupuestos mensuales por categoría de Presupuesto ARS (3 secciones) y USD (2 secciones).
 // Retorna Map: key = "categoria|tipo|moneda" → presupuesto mensual.
 async function getPresupuestos() {
   const [arsRes, usdRes] = await Promise.all([
@@ -740,7 +740,7 @@ async function getPresupuestos() {
     }),
     sheets.spreadsheets.values.get({
       spreadsheetId: config.sheetId,
-      range: 'Presupuesto USD!A5:B15',
+      range: "'Presupuesto USD'!A5:B40",
       valueRenderOption: 'UNFORMATTED_VALUE',
     }),
   ]);
@@ -769,14 +769,33 @@ async function getPresupuestos() {
     }
   }
 
-  // USD: indices 0-10 = Moises
-  for (let i = 0; i < 11; i++) {
-    const row = usdRows[i];
-    if (!row || !row[0]) continue;
-    const categoria = String(row[0]).trim();
-    const presupuesto = typeof row[1] === 'number' ? row[1] : parseLocalNumber(row[1]);
-    if (presupuesto > 0) {
-      presupuestos.set(`${categoria}|Individual Moises|USD`, presupuesto);
+  // USD: parsea secciones dinámicamente (Moises y Oriana)
+  // Estructura: categorías → TOTAL → blank → título → header → categorías → TOTAL
+  const usdSections = [
+    { tipo: 'Individual Moises' },
+    { tipo: 'Individual Oriana' },
+  ];
+  let idx = 0;
+  for (const sec of usdSections) {
+    // Buscar filas con categoría+presupuesto (saltar TOTAL, blanks, títulos, headers)
+    while (idx < usdRows.length) {
+      const row = usdRows[idx];
+      if (!row || !row[0]) { idx++; continue; }
+      const val = String(row[0]).trim();
+      // Saltar filas de estructura (TOTAL, títulos con ──, headers)
+      if (val === 'TOTAL' || val.includes('──') || val === 'Categoría') { idx++; continue; }
+      // Es una categoría
+      const presupuesto = typeof row[1] === 'number' ? row[1] : parseLocalNumber(row[1]);
+      if (presupuesto > 0) {
+        presupuestos.set(`${val}|${sec.tipo}|USD`, presupuesto);
+      }
+      idx++;
+      // Si la siguiente fila es TOTAL, terminó esta sección
+      const next = usdRows[idx];
+      if (next && String(next[0] || '').trim() === 'TOTAL') {
+        idx++; // saltar TOTAL
+        break;
+      }
     }
   }
 
@@ -1272,11 +1291,12 @@ async function setupEstilos() {
   }
 
   // ============================================================
-  // 5. PRESUPUESTO USD (1 seccion)
+  // 5. PRESUPUESTO USD (2 secciones: Moises y Oriana)
   // ============================================================
   const pUsd = sheetMap['Presupuesto USD'];
   if (pUsd !== undefined) {
     requests.push(textFmt(pUsd, 0, 1, 0, 2, { bold: true, color: C.headerDark, fontSize: 12 }));
+    // Sección Moises (filas 3-16, 0-indexed: 2-15)
     requests.push(bgColor(pUsd, 2, 3, 0, 16, C.sectionBg));
     requests.push(textFmt(pUsd, 2, 3, 0, 16, { bold: true, color: C.headerDark, hAlign: 'CENTER' }));
     requests.push(bgColor(pUsd, 3, 4, 0, 16, C.headerDark));
@@ -1284,6 +1304,14 @@ async function setupEstilos() {
     requests.push(...altRows(pUsd, 4, 15, 16));
     requests.push(bgColor(pUsd, 15, 16, 0, 16, C.totalBg));
     requests.push(textFmt(pUsd, 15, 16, 0, 16, { bold: true }));
+    // Sección Oriana (filas 18-31, 0-indexed: 17-30)
+    requests.push(bgColor(pUsd, 17, 18, 0, 16, C.sectionBg));
+    requests.push(textFmt(pUsd, 17, 18, 0, 16, { bold: true, color: C.green, hAlign: 'CENTER' }));
+    requests.push(bgColor(pUsd, 18, 19, 0, 16, C.green));
+    requests.push(textFmt(pUsd, 18, 19, 0, 16, { bold: true, color: C.white, hAlign: 'CENTER' }));
+    requests.push(...altRows(pUsd, 19, 30, 16));
+    requests.push(bgColor(pUsd, 30, 31, 0, 16, C.totalBg));
+    requests.push(textFmt(pUsd, 30, 31, 0, 16, { bold: true }));
     requests.push(colWidth(pUsd, 0, 160));
     requests.push(colWidth(pUsd, 1, 100));
   }
@@ -1538,13 +1566,14 @@ async function setupEstilosDark() {
   }
 
   // ============================================================
-  // 4. PRESUPUESTO USD
+  // 4. PRESUPUESTO USD (2 secciones: Moises y Oriana)
   // ============================================================
   const pUsd = sheetMap['Presupuesto USD'];
   if (pUsd !== undefined) {
-    requests.push(bgColor(pUsd, 0, 20, 0, 16, D.bg));
-    requests.push(textFmt(pUsd, 0, 20, 0, 16, { color: D.text }));
+    requests.push(bgColor(pUsd, 0, 35, 0, 16, D.bg));
+    requests.push(textFmt(pUsd, 0, 35, 0, 16, { color: D.text }));
     requests.push(textFmt(pUsd, 0, 1, 0, 2, { bold: true, color: D.white, fontSize: 12 }));
+    // Sección Moises (filas 3-16, 0-indexed: 2-15)
     requests.push(bgColor(pUsd, 2, 3, 0, 16, D.surface));
     requests.push(textFmt(pUsd, 2, 3, 0, 16, { bold: true, color: D.white, hAlign: 'CENTER' }));
     requests.push(bgColor(pUsd, 3, 4, 0, 16, D.headerDark));
@@ -1552,6 +1581,14 @@ async function setupEstilosDark() {
     requests.push(...altRowsDark(pUsd, 4, 15, 16));
     requests.push(bgColor(pUsd, 15, 16, 0, 16, D.totalBg));
     requests.push(textFmt(pUsd, 15, 16, 0, 16, { bold: true, color: D.white }));
+    // Sección Oriana (filas 18-31, 0-indexed: 17-30)
+    requests.push(bgColor(pUsd, 17, 18, 0, 16, D.surface));
+    requests.push(textFmt(pUsd, 17, 18, 0, 16, { bold: true, color: D.green || D.white, hAlign: 'CENTER' }));
+    requests.push(bgColor(pUsd, 18, 19, 0, 16, D.headerMed));
+    requests.push(textFmt(pUsd, 18, 19, 0, 16, { bold: true, color: D.white, hAlign: 'CENTER' }));
+    requests.push(...altRowsDark(pUsd, 19, 30, 16));
+    requests.push(bgColor(pUsd, 30, 31, 0, 16, D.totalBg));
+    requests.push(textFmt(pUsd, 30, 31, 0, 16, { bold: true, color: D.white }));
   }
 
   // ============================================================
@@ -2088,11 +2125,15 @@ async function setupFormatos() {
     }
   }
 
-  // 4. Presupuesto USD — 1 sección
+  // 4. Presupuesto USD — 2 secciones (Moises filas 5-16, Oriana filas 20-31)
   const pUsdId = sheetMap['Presupuesto USD'];
   if (pUsdId !== undefined) {
+    // Moises
     requests.push(fmt(pUsdId, 4, 16, 1, 15, '#,##0'));
     requests.push(fmt(pUsdId, 4, 16, 15, 16, '0%'));
+    // Oriana
+    requests.push(fmt(pUsdId, 19, 31, 1, 15, '#,##0'));
+    requests.push(fmt(pUsdId, 19, 31, 15, 16, '0%'));
   }
 
   // 5. Balance Compartido — Cols B-G filas 5-17 (datos + total)
@@ -3002,6 +3043,98 @@ async function appendInversionesHistorial(fecha, total, notas) {
 }
 
 
+// Agrega sección "ORIANA (USD)" a Presupuesto USD.
+// Ejecutar una sola vez: node -e "require('./src/sheets').setupPresupuestoUsdOriana()"
+async function setupPresupuestoUsdOriana() {
+  const spreadsheetId = config.sheetId;
+  function loc(f) { return f.replace(/,/g, ';'); }
+
+  // Leer categorías actuales de la sección Moises (fila 5 en adelante)
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: "'Presupuesto USD'!A5:A20",
+  });
+  const rows = res.data.values || [];
+  const categorias = [];
+  for (const r of rows) {
+    const val = (r[0] || '').trim();
+    if (!val || val === 'TOTAL') break;
+    categorias.push(val);
+  }
+  const numCat = categorias.length;
+  // Sección Moises: filas 3(titulo)+4(header)+5..5+numCat-1(cats)+5+numCat(TOTAL)
+  // Oriana empieza 2 filas después del TOTAL de Moises
+  const orianaStart = 5 + numCat + 2; // fila título Oriana (1-indexed)
+  const headerRow = orianaStart + 1;
+  const dataStart = headerRow + 1;
+  const totalRow = dataStart + numCat;
+  const MAX_TX = 5000;
+
+  const data = [];
+
+  // Título sección
+  data.push({
+    range: `'Presupuesto USD'!A${orianaStart}`,
+    values: [['── ORIANA (USD) ──']],
+  });
+
+  // Header
+  const meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+  data.push({
+    range: `'Presupuesto USD'!A${headerRow}:P${headerRow}`,
+    values: [['Categoría', 'Presup.', ...meses, 'Total', '%']],
+  });
+
+  // Categorías + fórmulas SUMIFS
+  const catValues = [];
+  const formulas = [];
+  for (let i = 0; i < numCat; i++) {
+    const row = dataStart + i;
+    catValues.push([categorias[i]]);
+    const rowFormulas = [];
+    for (let m = 1; m <= 12; m++) {
+      rowFormulas.push(loc(`=SUMIFS(Transacciones!$E$2:$E$${MAX_TX},Transacciones!$D$2:$D$${MAX_TX},$A${row},Transacciones!$F$2:$F$${MAX_TX},"USD",Transacciones!$H$2:$H$${MAX_TX},"Individual Oriana",Transacciones!$M$2:$M$${MAX_TX},${m},Transacciones!$N$2:$N$${MAX_TX},$B$1)`));
+    }
+    rowFormulas.push(loc(`=SUM(C${row}:N${row})`));
+    rowFormulas.push(loc(`=IFERROR(O${row}/(B${row}*12),0)`));
+    formulas.push(rowFormulas);
+  }
+
+  data.push({
+    range: `'Presupuesto USD'!A${dataStart}:A${dataStart + numCat - 1}`,
+    values: catValues,
+  });
+  data.push({
+    range: `'Presupuesto USD'!C${dataStart}:P${dataStart + numCat - 1}`,
+    values: formulas,
+  });
+
+  // Fila TOTAL
+  const totalFormulas = [loc(`=SUM(B${dataStart}:B${dataStart + numCat - 1})`)];
+  for (let c = 2; c <= 13; c++) {
+    const col = String.fromCharCode(65 + c); // C=67 → 'C'
+    totalFormulas.push(loc(`=SUM(${col}${dataStart}:${col}${dataStart + numCat - 1})`));
+  }
+  totalFormulas.push(loc(`=SUM(O${dataStart}:O${dataStart + numCat - 1})`));
+  totalFormulas.push(loc(`=IFERROR(O${totalRow}/(B${totalRow}*12),0)`));
+
+  data.push({
+    range: `'Presupuesto USD'!A${totalRow}`,
+    values: [['TOTAL']],
+  });
+  data.push({
+    range: `'Presupuesto USD'!B${totalRow}:P${totalRow}`,
+    values: [totalFormulas],
+  });
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: { valueInputOption: 'USER_ENTERED', data },
+  });
+
+  console.log(`Sección Oriana (USD) creada en filas ${orianaStart}-${totalRow} con ${numCat} categorías.`);
+}
+
 // Crea hoja "Pagos TC" para registrar totales reales de resúmenes de tarjeta y otros ingresos.
 // Ejecutar una sola vez: node -e "require('./src/sheets').setupPagosTC()"
 async function setupPagosTC() {
@@ -3292,5 +3425,6 @@ module.exports = {
   setupEstilosDark,
   setupCrypto, getCryptoHoldings, getCryptoTransactions, appendCryptoTransaction, addCryptoHolding,
   setupInversiones, getInversiones, getInversionesHistorial, updateInversiones, appendInversionesHistorial,
+  setupPresupuestoUsdOriana,
   setupPagosTC, migratePagosTC, getPagosTC, registrarPagoTC, registrarOtrosIngresos,
 };
