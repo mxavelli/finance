@@ -66,4 +66,7 @@ def parse_numero(val):
     # 1500,50 → coma como decimal
     if re.match(r'^\d+,\d+$', s):
         return float(s.replace(',', '.')) or 0
-    return float(s) or 0
+    try:
+        return float(s) or 0
+    except ValueError:
+        return 0

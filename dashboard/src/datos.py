@@ -434,7 +434,10 @@ def _safe_float(val):
     try:
         return float(val)
     except (ValueError, TypeError):
-        return parse_numero(val)
+        try:
+            return parse_numero(val)
+        except (ValueError, TypeError):
+            return 0.0
 
 
 def _safe_int(val):
