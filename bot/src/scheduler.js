@@ -167,27 +167,37 @@ async function sendWeeklySummary(bot, ctx) {
     console.error('Error obteniendo balance para resumen:', err.message);
   }
 
-  // Alertas de presupuesto (categorías en amarillo/rojo)
+  // Alertas de presupuesto (categorías en amarillo/rojo) + estado de ahorro
   try {
     const presupuestos = await getPresupuestos();
     const allMonthTx = await getMonthlyTransactions(month, year);
     const alerts = [];
+    const savingsAlerts = [];
 
     for (const [key, budget] of presupuestos) {
       const [categoria, tipo, moneda] = key.split('|');
-      const gastado = allMonthTx
+      const total = allMonthTx
         .filter(t => t.categoria === categoria && t.tipo === tipo && t.moneda === moneda)
         .reduce((sum, t) => sum + t.monto, 0);
-      const pct = budget > 0 ? (gastado / budget) * 100 : 0;
-      if (pct >= 80) {
+      const pct = budget > 0 ? (total / budget) * 100 : 0;
+
+      if (CATEGORIAS_POSITIVAS.includes(categoria)) {
+        // Categorías positivas: mostrar progreso de meta
+        const emoji = pct >= 100 ? '✅' : pct >= 80 ? '📈' : '📉';
+        savingsAlerts.push(`${emoji} ${categoria} (${tipo}): ${Math.round(pct)}% (${fmtMonto(total, moneda)} / ${fmtMonto(budget, moneda)})`);
+      } else if (pct >= 80) {
         const emoji = pct >= 100 ? '🔴' : '🟡';
-        alerts.push(`${emoji} ${categoria}: ${Math.round(pct)}% (${fmtMonto(gastado, moneda)} / ${fmtMonto(budget, moneda)})`);
+        alerts.push(`${emoji} ${categoria}: ${Math.round(pct)}% (${fmtMonto(total, moneda)} / ${fmtMonto(budget, moneda)})`);
       }
     }
 
     if (alerts.length > 0) {
       text += '\n*Presupuesto:*\n';
       for (const a of alerts) text += `${a}\n`;
+    }
+    if (savingsAlerts.length > 0) {
+      text += '\n*Meta de ahorro:*\n';
+      for (const a of savingsAlerts) text += `${a}\n`;
     }
   } catch (err) {
     console.error('Error obteniendo presupuestos para resumen:', err.message);
@@ -200,6 +210,60 @@ async function sendWeeklySummary(bot, ctx) {
   ]);
 
   console.log(`Resumen semanal enviado (${weekTx.length} tx de la semana).`);
+}
+
+
+// --- Alerta de ahorro bajo ---
+// Del día 25 en adelante, revisa si las categorías positivas (Ahorro / Inversión)
+// están por debajo del 80% de la meta. Alerta una vez por mes por categoría.
+
+const CATEGORIAS_POSITIVAS = ['Ahorro / Inversión'];
+
+async function checkSavingsAlert(bot, ctx) {
+  const { month, year, day } = ctx.getNowBA();
+  if (day < 25) return;
+
+  const presupuestos = await getPresupuestos();
+  const transactions = await getMonthlyTransactions(month, year);
+  const fmtMonto = ctx.fmtMonto;
+
+  for (const [key, budget] of presupuestos) {
+    const [categoria, tipo, moneda] = key.split('|');
+    if (!CATEGORIAS_POSITIVAS.includes(categoria)) continue;
+    if (budget <= 0) continue;
+
+    const totalAhorrado = transactions
+      .filter(t => t.categoria === categoria && t.tipo === tipo && t.moneda === moneda)
+      .reduce((sum, t) => sum + t.monto, 0);
+
+    const pct = (totalAhorrado / budget) * 100;
+    if (pct >= 80) continue; // Va bien, no alertar
+
+    const alertKey = `savings|${key}|${month}|${year}`;
+    if (ctx.budgetAlertsSent.has(alertKey)) continue;
+    ctx.budgetAlertsSent.set(alertKey, Date.now());
+
+    const pctStr = Math.round(pct);
+    const text =
+      `📉 *Meta de ahorro*\n\n` +
+      `Vas ${pctStr}% de tu meta de *${categoria}* (${tipo}).\n` +
+      `Ahorrado: ${fmtMonto(totalAhorrado, moneda)} / ${fmtMonto(budget, moneda)}\n` +
+      `Quedan ${daysLeftInMonth(year, month, day)} días para alcanzar tu meta.`;
+
+    const tipoLower = (tipo || '').toLowerCase();
+    const recipients = tipoLower.includes('moises') ? [config.moisesId]
+      : tipoLower.includes('oriana') ? [config.orianaId]
+      : [config.moisesId, config.orianaId];
+
+    for (const rid of recipients) {
+      await bot.api.sendMessage(rid, text, { parse_mode: 'Markdown' });
+    }
+  }
+}
+
+function daysLeftInMonth(year, month, currentDay) {
+  const lastDay = new Date(year, month, 0).getDate();
+  return lastDay - currentDay;
 }
 
 
@@ -217,6 +281,13 @@ function startScheduler(bot, ctx) {
     );
   }, { timezone: 'America/Argentina/Buenos_Aires' });
 
+  // Diario 20:00 (8 PM) Buenos Aires — alerta de ahorro bajo (día 25+)
+  cron.schedule('0 20 * * *', () => {
+    checkSavingsAlert(bot, ctx).catch(err =>
+      console.error('Error en alerta de ahorro:', err.message)
+    );
+  }, { timezone: 'America/Argentina/Buenos_Aires' });
+
   // Lunes 9:00 AM Buenos Aires — resumen semanal
   cron.schedule('0 9 * * 1', () => {
     sendWeeklySummary(bot, ctx).catch(err =>
@@ -230,7 +301,7 @@ function startScheduler(bot, ctx) {
     console.log('Alertas de presupuesto reseteadas para el nuevo mes.');
   }, { timezone: 'America/Argentina/Buenos_Aires' });
 
-  console.log('Scheduler iniciado: auto-fijos diario 9:00, resumen semanal lunes 9:00.');
+  console.log('Scheduler iniciado: auto-fijos 9:00, ahorro 20:00, resumen semanal lunes 9:00.');
 }
 
 module.exports = { startScheduler };

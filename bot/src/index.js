@@ -195,7 +195,12 @@ function fmtMonto(monto, moneda) {
   return formatAmount(monto, moneda || 'ARS');
 }
 
+// Categorías donde exceder el presupuesto es positivo (ahorro/inversión).
+// Para estas se invierte la lógica: alerta cuando estás BAJO la meta.
+const CATEGORIAS_POSITIVAS = ['Ahorro / Inversión'];
+
 // Verifica si una transacción superó el 80% o 100% del presupuesto de su categoría.
+// Para categorías positivas (ahorro), no alerta al exceder.
 // Se ejecuta después de cada appendTransaction exitoso (fire and forget).
 async function checkBudgetAlert(userId, tx) {
   try {
@@ -206,6 +211,9 @@ async function checkBudgetAlert(userId, tx) {
     const key = `${tx.categoria}|${tx.tipo}|${tx.moneda}`;
     const budget = presupuestos.get(key);
     if (!budget || budget <= 0) return;
+
+    // Categorías positivas: no alertar por exceso
+    if (CATEGORIAS_POSITIVAS.includes(tx.categoria)) return;
 
     const transactions = await getMonthlyTransactions(month, year);
     const totalGastado = transactions
