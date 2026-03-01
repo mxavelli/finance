@@ -496,6 +496,8 @@ def render_presupuesto(mes, anio):
     default_pres = 'Oriana ARS' if usuario == 'Oriana' else 'Moises ARS'
     vista = st.segmented_control('Sección', ['Moises ARS', 'Oriana ARS', 'Compartido ARS', 'Moises USD', 'Oriana USD'],
                                  default=default_pres)
+    if vista is None:
+        vista = default_pres
 
     es_usd = 'USD' in vista
     if es_usd:
