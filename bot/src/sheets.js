@@ -3463,4 +3463,5 @@ module.exports = {
   setupInversiones, getInversiones, getInversionesHistorial, updateInversiones, appendInversionesHistorial,
   setupPresupuestoUsdOriana,
   setupPagosTC, migratePagosTC, getPagosTC, registrarPagoTC, registrarOtrosIngresos,
+  parseLocalNumber,
 };

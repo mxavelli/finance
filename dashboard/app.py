@@ -494,12 +494,13 @@ def render_presupuesto(mes, anio):
     st.header(f'Presupuesto vs real — {nombre_mes(mes)}')
 
     default_pres = 'Oriana ARS' if usuario == 'Oriana' else 'Moises ARS'
-    vista = st.segmented_control('Sección', ['Moises ARS', 'Oriana ARS', 'Compartido ARS', 'Moises USD'],
+    vista = st.segmented_control('Sección', ['Moises ARS', 'Oriana ARS', 'Compartido ARS', 'Moises USD', 'Oriana USD'],
                                  default=default_pres)
 
-    es_usd = vista == 'Moises USD'
+    es_usd = 'USD' in vista
     if es_usd:
-        df_pres = cargar_presupuesto_usd()
+        presupuestos_usd = cargar_presupuesto_usd()
+        df_pres = presupuestos_usd['oriana'] if 'Oriana' in vista else presupuestos_usd['moises']
     else:
         presupuestos = cargar_presupuesto_ars()
         if 'Moises' in vista:

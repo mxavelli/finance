@@ -206,47 +206,55 @@ def cargar_balance():
 def cargar_presupuesto_ars():
     """Lee presupuesto ARS con 3 secciones: Moises, Oriana, Compartido.
 
-    Layout del sheet (verificado con setup.js):
+    Layout del sheet (13 categorías por sección, verificado con setup.js secStarts=[4,21,38]):
     - Row 1: Año: 2026
-    - Row 3: título Moises, Row 4: headers, Rows 5-15: 11 categorías, Row 16: TOTAL
-    - Row 18: título Oriana, Row 19: headers, Rows 20-30: 11 categorías, Row 31: TOTAL
-    - Row 33: título Compartido, Row 34: headers, Rows 35-45: 11 categorías, Row 46: TOTAL
+    - Row 3: título Moises, Row 4: headers, Rows 5-17: 13 categorías, Row 18: TOTAL
+    - Row 20: título Oriana, Row 21: headers, Rows 22-34: 13 categorías, Row 35: TOTAL
+    - Row 37: título Compartido, Row 38: headers, Rows 39-51: 13 categorías, Row 52: TOTAL
     """
     sheet = get_sheet()
     ws = sheet.worksheet('Presupuesto ARS')
-    data = ws.get('A1:P46', value_render_option='UNFORMATTED_VALUE')
+    data = ws.get('A1:P52', value_render_option='UNFORMATTED_VALUE')
     if not data:
         return {'moises': _df_presupuesto_vacio(), 'oriana': _df_presupuesto_vacio(),
                 'compartido': _df_presupuesto_vacio()}
 
     # Padding filas
-    while len(data) < 46:
+    while len(data) < 52:
         data.append([None] * 16)
 
     return {
-        'moises': _parse_seccion_presupuesto(data, 4, 15),     # rows 5-15 (0-indexed: 4-14)
-        'oriana': _parse_seccion_presupuesto(data, 19, 30),     # rows 20-30 (0-indexed: 19-29)
-        'compartido': _parse_seccion_presupuesto(data, 34, 45), # rows 35-45 (0-indexed: 34-44)
+        'moises': _parse_seccion_presupuesto(data, 4, 17),      # rows 5-17 (0-indexed: 4-16)
+        'oriana': _parse_seccion_presupuesto(data, 21, 34),      # rows 22-34 (0-indexed: 21-33)
+        'compartido': _parse_seccion_presupuesto(data, 38, 51),  # rows 39-51 (0-indexed: 38-50)
     }
 
 
 @st.cache_data(ttl=300)
 def cargar_presupuesto_usd():
-    """Lee presupuesto USD (1 sección: Moises)."""
+    """Lee presupuesto USD con 2 secciones: Moises y Oriana (11 categorías cada una).
+
+    Layout (setupPresupuestoUsdOriana):
+    - Row 3: título Moises, Row 4: headers, Rows 5-15: 11 categorías, Row 16: TOTAL
+    - Row 18: título Oriana, Row 19: headers, Rows 20-30: 11 categorías, Row 31: TOTAL
+    """
     sheet = get_sheet()
     ws = sheet.worksheet('Presupuesto USD')
-    data = ws.get('A1:P16', value_render_option='UNFORMATTED_VALUE')
+    data = ws.get('A1:P35', value_render_option='UNFORMATTED_VALUE')
     if not data:
-        return _df_presupuesto_vacio()
+        return {'moises': _df_presupuesto_vacio(), 'oriana': _df_presupuesto_vacio()}
 
-    while len(data) < 16:
+    while len(data) < 35:
         data.append([None] * 16)
 
-    return _parse_seccion_presupuesto(data, 4, 15)
+    return {
+        'moises': _parse_seccion_presupuesto(data, 4, 15),   # rows 5-15 (0-indexed: 4-14)
+        'oriana': _parse_seccion_presupuesto(data, 19, 30),   # rows 20-30 (0-indexed: 19-29)
+    }
 
 
 def _parse_seccion_presupuesto(data, start_idx, end_idx):
-    """Parsea una sección de presupuesto (11 categorías)."""
+    """Parsea una sección de presupuesto (N categorías entre start_idx y end_idx)."""
     rows = []
     for i in range(start_idx, min(end_idx, len(data))):
         r = data[i]

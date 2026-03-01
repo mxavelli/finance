@@ -8,7 +8,7 @@ const {
   getGastosFijos, updateGastoFijoMonto, getLastTransactions, deleteTransaction,
   getIncomeStatus, registerIncome, getCurrentIncome, updateIncome, getFlowData,
   getCuotas, appendCuota, updateCuotasBatch, updateCuotaMonto,
-  getPresupuestos, getSharedUnsettled, settleTransaction,
+  getPresupuestos, getSharedUnsettled, settleTransaction, parseLocalNumber,
   getCryptoHoldings, getCryptoTransactions, appendCryptoTransaction, addCryptoHolding,
   getInversiones, getInversionesHistorial, updateInversiones, appendInversionesHistorial,
   registrarPagoTC, registrarOtrosIngresos,
@@ -38,6 +38,7 @@ const pendingCuotaEdit = new Map(); // Ajuste de monto cuota post-confirmacion (
 const pendingSettle = new Map();   // Saldados pendientes de confirmacion
 const pendingCrypto = new Map();   // Operaciones crypto pendientes
 const pendingInversiones = new Map(); // Actualización de inversiones pendiente
+const pendingManual = new Map();     // Wizard carga manual (userId → estado)
 let txCounter = 0;
 const TX_TTL = 10 * 60 * 1000; // 10 minutos
 
@@ -72,7 +73,7 @@ const mainMenu = new Keyboard()
 
 // Mapeo botón del menú → nombre de comando
 const MENU_MAP = {
-  '📋 Registrar':  'registrar_fijos',
+  '📋 Registrar':  'registrar_menu',
   '💰 Balance':    'balance',
   '📊 Resumen':    'resumen',
   '💳 Tarjeta':    'tarjeta',
@@ -1105,6 +1106,60 @@ bot.callbackQuery(/^inv_no:(\d+)$/, async (ctx) => {
 });
 
 
+// /gasto — wizard interactivo para carga manual paso a paso
+async function cmdGasto(ctx) {
+  try {
+    const userId = ctx.from.id;
+    pendingManual.delete(userId);
+    cleanMap(pendingManual);
+
+    const categories = await getCategories();
+    const manualId = ++txCounter;
+    pendingManual.set(userId, {
+      id: manualId,
+      step: 'category',
+      data: {},
+      createdAt: Date.now(),
+    });
+
+    const keyboard = new InlineKeyboard();
+    categories.forEach((cat, i) => {
+      keyboard.text(cat.name, `mg_cat:${manualId}:${i}`);
+      if (i % 2 === 1) keyboard.row();
+    });
+    if (categories.length % 2 === 1) keyboard.row();
+    keyboard.text('❌ Cancelar', `mg_no:${manualId}`);
+
+    const method = ctx.callbackQuery ? 'editMessageText' : 'reply';
+    await ctx[method](
+      '📋 *Nuevo gasto — Paso 1/6*\n\nElegí la categoría:',
+      { parse_mode: 'Markdown', reply_markup: keyboard }
+    );
+  } catch (error) {
+    console.error('Error en cmdGasto:', error.message);
+    ctx.reply('Error iniciando el wizard. Revisá los logs.');
+  }
+}
+bot.command('gasto', cmdGasto);
+
+// Submenú Registrar: muestra opciones "Nuevo gasto" y "Gastos fijos"
+async function cmdRegistrarMenu(ctx) {
+  const keyboard = new InlineKeyboard()
+    .text('💰 Nuevo gasto', 'registrar_gasto')
+    .text('📋 Gastos fijos', 'registrar_fijos_btn');
+  await ctx.reply('*¿Qué querés registrar?*', { parse_mode: 'Markdown', reply_markup: keyboard });
+}
+
+bot.callbackQuery('registrar_gasto', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await cmdGasto(ctx);
+});
+
+bot.callbackQuery('registrar_fijos_btn', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await cmdRegistrarFijos(ctx);
+});
+
 // Mapa de handlers para el menú persistente
 const CMD_HANDLERS = {
   start: cmdStart,
@@ -1115,6 +1170,8 @@ const CMD_HANDLERS = {
   cuotas: cmdCuotas,
   flujo: cmdFlujo,
   registrar_fijos: cmdRegistrarFijos,
+  registrar_menu: cmdRegistrarMenu,
+  gasto: cmdGasto,
   borrar: cmdBorrar,
   saldar: cmdSaldar,
   crypto: cmdCrypto,
@@ -1417,7 +1474,7 @@ async function showAiTxPreview(ctx, tx, emoji) {
   // Cuotas → pedir tarjeta
   if (tx.cuotas) {
     tx.metodoPago = 'Tarjeta';
-    const montoCuota = Math.round(tx.monto / tx.cuotas);
+    const montoCuota = Math.round(tx.monto / tx.cuotas * 100) / 100;
     pendingTx.set(txId, { ...tx, montoCuota, userId: ctx.from.id, createdAt: Date.now() });
 
     const preview =
@@ -1597,6 +1654,46 @@ bot.on('message:text', async (ctx) => {
       return CMD_HANDLERS[menuCmd](ctx);
     }
 
+    // Interceptar wizard de carga manual (paso descripción o monto)
+    const manual = pendingManual.get(ctx.from.id);
+    if (manual && Date.now() - manual.createdAt < TX_TTL) {
+      if (manual.step === 'description') {
+        manual.data.descripcion = text.charAt(0).toUpperCase() + text.slice(1);
+        manual.step = 'amount';
+        return ctx.reply(
+          `📋 *Nuevo gasto — Paso 3/6*\n\n` +
+          `🏷️ ${manual.data.categoria}\n` +
+          `📝 ${manual.data.descripcion}\n\n` +
+          `Escribí el monto:`,
+          { parse_mode: 'Markdown' }
+        );
+      }
+
+      if (manual.step === 'amount') {
+        const monto = parseLocalNumber(text);
+        if (!monto || monto <= 0) {
+          return ctx.reply('Monto inválido. Escribí un número (ej: 15000, 15.000, 1500,50).');
+        }
+        manual.data.monto = monto;
+        manual.step = 'currency';
+
+        const keyboard = new InlineKeyboard()
+          .text('🇦🇷 ARS', `mg_cur:${manual.id}:ARS`)
+          .text('🇺🇸 USD', `mg_cur:${manual.id}:USD`)
+          .row()
+          .text('❌ Cancelar', `mg_no:${manual.id}`);
+
+        return ctx.reply(
+          `📋 *Nuevo gasto — Paso 4/6*\n\n` +
+          `🏷️ ${manual.data.categoria}\n` +
+          `📝 ${manual.data.descripcion}\n` +
+          `💰 ${formatAmount(monto, 'ARS')}\n\n` +
+          `Elegí la moneda:`,
+          { parse_mode: 'Markdown', reply_markup: keyboard }
+        );
+      }
+    }
+
     // Interceptar si el usuario tiene una tx de audio/foto esperando método de pago
     // metodoPago null = preguntó "¿Con qué pagaste?", 'Tarjeta' = preguntó "Elegí tarjeta"
     const pendingPayment = [...pendingTx.entries()].find(
@@ -1635,7 +1732,7 @@ bot.on('message:text', async (ctx) => {
           const cierreDay = config.cierreTarjetas[matchedCard] || 0;
           const primera = calcPrimeraCuota(now, cierreDay);
           const primeraCuotaStr = formatMesAnio(primera.month, primera.year);
-          const montoCuota = tx.montoCuota || Math.round(tx.monto / tx.cuotas);
+          const montoCuota = tx.montoCuota || Math.round(tx.monto / tx.cuotas * 100) / 100;
 
           pendingTx.delete(txId);
           await appendCuota({
@@ -1967,6 +2064,249 @@ bot.on('message:text', async (ctx) => {
 });
 
 // ============================================
+// CALLBACKS — Wizard carga manual (/gasto)
+// ============================================
+
+// Selección de categoría
+bot.callbackQuery(/^mg_cat:(\d+):(\d+)$/, async (ctx) => {
+  const manualId = parseInt(ctx.match[1]);
+  const catIdx = parseInt(ctx.match[2]);
+  const pending = pendingManual.get(ctx.from.id);
+
+  if (!pending || pending.id !== manualId)
+    return ctx.answerCallbackQuery({ text: 'Expirado.' });
+
+  const categories = await getCategories();
+  pending.data.categoria = categories[catIdx]?.name || 'Otros';
+  pending.step = 'description';
+
+  await ctx.editMessageText(
+    `📋 *Nuevo gasto — Paso 2/6*\n\n` +
+    `🏷️ Categoría: ${pending.data.categoria}\n\n` +
+    `Escribí la descripción:`,
+    { parse_mode: 'Markdown' }
+  );
+  await ctx.answerCallbackQuery();
+});
+
+// Selección de moneda
+bot.callbackQuery(/^mg_cur:(\d+):(ARS|USD)$/, async (ctx) => {
+  const manualId = parseInt(ctx.match[1]);
+  const moneda = ctx.match[2];
+  const pending = pendingManual.get(ctx.from.id);
+
+  if (!pending || pending.id !== manualId)
+    return ctx.answerCallbackQuery({ text: 'Expirado.' });
+
+  pending.data.moneda = moneda;
+
+  // USD → método Deel Card por defecto, saltar a tipo
+  if (moneda === 'USD') {
+    pending.data.metodoPago = 'Deel Card';
+    pending.step = 'type';
+    const kb = new InlineKeyboard()
+      .text('👤 Individual', `mg_type:${manualId}:individual`)
+      .text('👥 Compartido', `mg_type:${manualId}:compartido`)
+      .row()
+      .text('❌ Cancelar', `mg_no:${manualId}`);
+
+    await ctx.editMessageText(
+      `📋 *Nuevo gasto — Paso 6/6*\n\n` +
+      `🏷️ ${pending.data.categoria}\n` +
+      `📝 ${pending.data.descripcion}\n` +
+      `💰 ${formatAmount(pending.data.monto, moneda)}\n` +
+      `💳 Deel Card\n\n` +
+      `Elegí el tipo:`,
+      { parse_mode: 'Markdown', reply_markup: kb }
+    );
+    return ctx.answerCallbackQuery();
+  }
+
+  // ARS → mostrar métodos de pago
+  pending.step = 'payment';
+  const keyboard = new InlineKeyboard();
+  AI_PAYMENT_METHODS.forEach((method, i) => {
+    keyboard.text(method, `mg_pay:${manualId}:${i}`);
+    if (i % 2 === 1) keyboard.row();
+  });
+  if (AI_PAYMENT_METHODS.length % 2 === 1) keyboard.row();
+  keyboard.text('❌ Cancelar', `mg_no:${manualId}`);
+
+  await ctx.editMessageText(
+    `📋 *Nuevo gasto — Paso 5/6*\n\n` +
+    `🏷️ ${pending.data.categoria}\n` +
+    `📝 ${pending.data.descripcion}\n` +
+    `💰 ${formatAmount(pending.data.monto, moneda)}\n\n` +
+    `Elegí el método de pago:`,
+    { parse_mode: 'Markdown', reply_markup: keyboard }
+  );
+  await ctx.answerCallbackQuery();
+});
+
+// Selección de método de pago
+bot.callbackQuery(/^mg_pay:(\d+):(\d+)$/, async (ctx) => {
+  const manualId = parseInt(ctx.match[1]);
+  const methodIdx = parseInt(ctx.match[2]);
+  const pending = pendingManual.get(ctx.from.id);
+
+  if (!pending || pending.id !== manualId)
+    return ctx.answerCallbackQuery({ text: 'Expirado.' });
+
+  const metodo = AI_PAYMENT_METHODS[methodIdx];
+
+  // Si eligió "Tarjeta", mostrar tarjetas específicas
+  if (metodo === 'Tarjeta') {
+    pending.step = 'card';
+    const userCards = config.tarjetas[ctx.from.id] || [];
+    const kb = new InlineKeyboard();
+    userCards.forEach((card, i) => {
+      kb.text(`💳 ${card}`, `mg_crd:${manualId}:${i}`);
+      if (i % 2 === 1) kb.row();
+    });
+    if (userCards.length % 2 === 1) kb.row();
+    kb.text('❌ Cancelar', `mg_no:${manualId}`);
+
+    await ctx.editMessageText(
+      `📋 *Nuevo gasto — Paso 5/6*\n\n` +
+      `Elegí la tarjeta:`,
+      { parse_mode: 'Markdown', reply_markup: kb }
+    );
+    return ctx.answerCallbackQuery();
+  }
+
+  // Otro método → pasar a tipo
+  pending.data.metodoPago = metodo;
+  pending.step = 'type';
+
+  const kb = new InlineKeyboard()
+    .text('👤 Individual', `mg_type:${manualId}:individual`)
+    .text('👥 Compartido', `mg_type:${manualId}:compartido`)
+    .row()
+    .text('❌ Cancelar', `mg_no:${manualId}`);
+
+  await ctx.editMessageText(
+    `📋 *Nuevo gasto — Paso 6/6*\n\n` +
+    `🏷️ ${pending.data.categoria}\n` +
+    `📝 ${pending.data.descripcion}\n` +
+    `💰 ${formatAmount(pending.data.monto, pending.data.moneda)}\n` +
+    `💳 ${metodo}\n\n` +
+    `Elegí el tipo:`,
+    { parse_mode: 'Markdown', reply_markup: kb }
+  );
+  await ctx.answerCallbackQuery();
+});
+
+// Selección de tarjeta específica
+bot.callbackQuery(/^mg_crd:(\d+):(\d+)$/, async (ctx) => {
+  const manualId = parseInt(ctx.match[1]);
+  const cardIdx = parseInt(ctx.match[2]);
+  const pending = pendingManual.get(ctx.from.id);
+
+  if (!pending || pending.id !== manualId)
+    return ctx.answerCallbackQuery({ text: 'Expirado.' });
+
+  const userCards = config.tarjetas[ctx.from.id] || [];
+  pending.data.metodoPago = userCards[cardIdx];
+  pending.step = 'type';
+
+  const kb = new InlineKeyboard()
+    .text('👤 Individual', `mg_type:${manualId}:individual`)
+    .text('👥 Compartido', `mg_type:${manualId}:compartido`)
+    .row()
+    .text('❌ Cancelar', `mg_no:${manualId}`);
+
+  await ctx.editMessageText(
+    `📋 *Nuevo gasto — Paso 6/6*\n\n` +
+    `🏷️ ${pending.data.categoria}\n` +
+    `📝 ${pending.data.descripcion}\n` +
+    `💰 ${formatAmount(pending.data.monto, pending.data.moneda)}\n` +
+    `💳 ${pending.data.metodoPago}\n\n` +
+    `Elegí el tipo:`,
+    { parse_mode: 'Markdown', reply_markup: kb }
+  );
+  await ctx.answerCallbackQuery();
+});
+
+// Selección de tipo (individual/compartido) → preview final
+bot.callbackQuery(/^mg_type:(\d+):(individual|compartido)$/, async (ctx) => {
+  const manualId = parseInt(ctx.match[1]);
+  const tipoChoice = ctx.match[2];
+  const pending = pendingManual.get(ctx.from.id);
+
+  if (!pending || pending.id !== manualId)
+    return ctx.answerCallbackQuery({ text: 'Expirado.' });
+
+  const isMoises = ctx.from.id === config.moisesId;
+  const pagadoPor = isMoises ? 'Moises' : 'Oriana';
+
+  let tipo, splitMoises, splitOriana;
+  if (tipoChoice === 'compartido') {
+    tipo = 'Compartido';
+    splitMoises = 50;
+    splitOriana = 50;
+  } else {
+    tipo = isMoises ? 'Individual Moises' : 'Individual Oriana';
+    splitMoises = isMoises ? 100 : 0;
+    splitOriana = isMoises ? 0 : 100;
+  }
+
+  // Fecha/hora en timezone Buenos Aires
+  const now = new Date();
+  const baOpts = { timeZone: 'America/Argentina/Buenos_Aires' };
+  const fecha = now.toLocaleDateString('es-AR', { ...baOpts, day: '2-digit', month: '2-digit', year: 'numeric' });
+  const hora = now.toLocaleTimeString('es-AR', { ...baOpts, hour: '2-digit', minute: '2-digit', hour12: false });
+
+  // Construir tx completa y mover a pendingTx para reusar callbacks existentes
+  const tx = {
+    fecha, hora,
+    descripcion: pending.data.descripcion,
+    categoria: pending.data.categoria,
+    monto: pending.data.monto,
+    moneda: pending.data.moneda,
+    metodoPago: pending.data.metodoPago,
+    tipo, pagadoPor,
+    splitMoises, splitOriana,
+    notas: '',
+  };
+
+  cleanMap(pendingTx);
+  const txId = ++txCounter;
+  pendingTx.set(txId, { ...tx, userId: ctx.from.id, createdAt: Date.now() });
+  pendingManual.delete(ctx.from.id);
+
+  const preview =
+    `✅ *Confirmar gasto*\n\n` +
+    `📅 ${fecha} ${hora}\n` +
+    `📋 ${tx.descripcion}\n` +
+    `🏷️ ${tx.categoria}\n` +
+    `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+    `💳 ${tx.metodoPago}\n` +
+    `👤 ${tx.tipo}\n` +
+    `🙋 Pagado por: ${pagadoPor}` +
+    (tipo === 'Compartido' ? `\n📊 Split: Moises ${splitMoises}% / Oriana ${splitOriana}%` : '');
+
+  const keyboard = new InlineKeyboard()
+    .text('✅ Confirmar', `tx_ok:${txId}`)
+    .text('🔄 Compartido', `photo_shared:${txId}`)
+    .row()
+    .text('❌ Cancelar', `tx_no:${txId}`);
+
+  await ctx.editMessageText(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
+  await ctx.answerCallbackQuery();
+});
+
+// Cancelar wizard
+bot.callbackQuery(/^mg_no:(\d+)$/, async (ctx) => {
+  const manualId = parseInt(ctx.match[1]);
+  const pending = pendingManual.get(ctx.from.id);
+  if (pending && pending.id === manualId) {
+    pendingManual.delete(ctx.from.id);
+  }
+  await ctx.editMessageText('❌ Carga cancelada.');
+  await ctx.answerCallbackQuery({ text: 'Cancelado' });
+});
+
+// ============================================
 // CALLBACKS — Transacciones
 // ============================================
 
@@ -2052,7 +2392,7 @@ bot.callbackQuery(/^cuota_card_(\d+)_(\d+)$/, async (ctx) => {
     const cierreDay = config.cierreTarjetas[cardName] || 0;
     const primera = calcPrimeraCuota(now, cierreDay);
     const primeraCuotaStr = formatMesAnio(primera.month, primera.year);
-    const montoCuota = tx.montoCuota || Math.round(tx.monto / tx.cuotas);
+    const montoCuota = tx.montoCuota || Math.round(tx.monto / tx.cuotas * 100) / 100;
 
     await appendCuota({
       descripcion: tx.descripcion,

@@ -8,7 +8,7 @@ function normalize(str) {
 
 // Formatea monto en formato argentino para el preview.
 function formatAmount(monto, moneda) {
-  const formatted = monto.toLocaleString('es-AR', { maximumFractionDigits: 2 });
+  const formatted = monto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return moneda === 'USD' ? `US$${formatted}` : `$${formatted}`;
 }
 

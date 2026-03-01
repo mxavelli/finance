@@ -10,17 +10,20 @@ MESES_CORTOS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun',
 
 
 def formato_ars(monto):
-    """Formatea un monto en pesos argentinos: $1.234.567"""
+    """Formatea un monto en pesos argentinos: $1.234.567,00"""
     if monto is None or monto == 0:
-        return '$0'
-    return '${:,.0f}'.format(monto).replace(',', '.')
+        return '$0,00'
+    # {:,.2f} produce "1,234,567.89" (US) → swap a "1.234.567,89" (AR)
+    us = '{:,.2f}'.format(monto)
+    ar = us.replace(',', 'X').replace('.', ',').replace('X', '.')
+    return f'${ar}'
 
 
 def formato_usd(monto):
-    """Formatea un monto en dólares: USD 1,234"""
+    """Formatea un monto en dólares: USD 1,234.00"""
     if monto is None or monto == 0:
-        return 'USD 0'
-    return 'USD {:,.0f}'.format(monto)
+        return 'USD 0.00'
+    return 'USD {:,.2f}'.format(monto)
 
 
 def formato_moneda(monto, moneda):
