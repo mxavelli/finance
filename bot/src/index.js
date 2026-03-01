@@ -4,10 +4,10 @@
 const { Bot, InlineKeyboard, Keyboard } = require('grammy');
 const config = require('./config');
 const {
-  appendTransaction, getBalance, getMonthlyTransactions,
+  appendTransaction, appendTransactionsBatch, getBalance, getMonthlyTransactions,
   getGastosFijos, updateGastoFijoMonto, getLastTransactions, deleteTransaction,
   getIncomeStatus, registerIncome, getCurrentIncome, updateIncome, getFlowData,
-  getCuotas, appendCuota, updateCuotaRegistradas, updateCuotaMonto,
+  getCuotas, appendCuota, updateCuotasBatch, updateCuotaMonto,
   getPresupuestos, getSharedUnsettled, settleTransaction,
   getCryptoHoldings, getCryptoTransactions, appendCryptoTransaction, addCryptoHolding,
   getInversiones, getInversionesHistorial, updateInversiones, appendInversionesHistorial,
@@ -2544,7 +2544,8 @@ bot.callbackQuery(/^fijos_ok:(\d+)$/, async (ctx) => {
     const fechaStr = now.toLocaleDateString('es-AR', { ...options, day: '2-digit', month: '2-digit', year: 'numeric' });
     const horaStr = now.toLocaleTimeString('es-AR', { ...options, hour: '2-digit', minute: '2-digit', hour12: false });
 
-    // Registrar gastos fijos
+    // Armar todas las transacciones en batch (evita rate limit)
+    const allTx = [];
     for (const g of aRegistrar) {
       const { pagadoPor, splitMoises, splitOriana } = derivePagador(g.tipo, pending.userId);
       let metodo = g.metodoPago;
@@ -2552,7 +2553,7 @@ bot.callbackQuery(/^fijos_ok:(\d+)$/, async (ctx) => {
         const userCards = config.tarjetas[pending.userId] || [];
         metodo = userCards[0] || 'Tarjeta';
       }
-      await appendTransaction({
+      allTx.push({
         fecha: fechaStr, hora: horaStr,
         descripcion: g.descripcion, categoria: g.categoria,
         monto: g.montoEstimado, moneda: g.moneda, metodoPago: metodo,
@@ -2560,18 +2561,23 @@ bot.callbackQuery(/^fijos_ok:(\d+)$/, async (ctx) => {
         notas: 'Gasto fijo',
       });
     }
-
-    // Registrar cuotas
     for (const c of cuotasARegistrar) {
       const { pagadoPor, splitMoises, splitOriana } = derivePagador(c.tipo, pending.userId);
-      await appendTransaction({
+      allTx.push({
         fecha: fechaStr, hora: horaStr,
         descripcion: c.descripcion, categoria: c.categoria,
         monto: c.montoCuota, moneda: c.moneda, metodoPago: c.tarjeta,
         tipo: c.tipo, pagadoPor, splitMoises, splitOriana,
         notas: `Cuota ${c.cuotaNumero}/${c.cuotasTotales}`,
       });
-      await updateCuotaRegistradas(c.row, c.cuotaNumero);
+    }
+
+    // 1 read + 1 write en vez de N×2
+    await appendTransactionsBatch(allTx);
+
+    // Actualizar cuotas registradas en batch (1 write)
+    if (cuotasARegistrar.length > 0) {
+      await updateCuotasBatch(cuotasARegistrar.map(c => ({ row: c.row, count: c.cuotaNumero })));
     }
 
     // Budget alerts para cada categoría registrada

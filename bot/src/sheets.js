@@ -30,21 +30,16 @@ async function testConnection() {
 
 // Guarda una transaccion en la hoja Transacciones (columnas A-L).
 // Escribe en la siguiente fila vacia dentro del rango pre-formateado.
-async function appendTransaction(tx) {
-  const row = [
-    tx.fecha,
-    tx.hora,
-    tx.descripcion,
-    tx.categoria,
-    tx.monto,
-    tx.moneda,
-    tx.metodoPago,
-    tx.tipo,
-    tx.pagadoPor,
-    tx.splitMoises,
-    tx.splitOriana,
-    tx.notas || '',
+function txToRow(tx) {
+  return [
+    tx.fecha, tx.hora, tx.descripcion, tx.categoria,
+    tx.monto, tx.moneda, tx.metodoPago, tx.tipo,
+    tx.pagadoPor, tx.splitMoises, tx.splitOriana, tx.notas || '',
   ];
+}
+
+async function appendTransaction(tx) {
+  const row = txToRow(tx);
 
   // Buscar la siguiente fila vacia
   const response = await sheets.spreadsheets.values.get({
@@ -59,6 +54,42 @@ async function appendTransaction(tx) {
     range: `Transacciones!A${nextRow}:L${nextRow}`,
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: [row] },
+  });
+}
+
+// Registra múltiples transacciones en una sola llamada API.
+// Evita rate limit de Google Sheets al registrar muchos gastos fijos/cuotas.
+async function appendTransactionsBatch(txList) {
+  if (txList.length === 0) return;
+  const rows = txList.map(txToRow);
+
+  // Buscar la siguiente fila vacía (1 read)
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: config.sheetId,
+    range: 'Transacciones!A2:A',
+  });
+  const existingRows = response.data.values ? response.data.values.length : 0;
+  const nextRow = existingRows + 2;
+
+  // Escribir todas las filas de una sola vez (1 write)
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: config.sheetId,
+    range: `Transacciones!A${nextRow}:L${nextRow + rows.length - 1}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: rows },
+  });
+}
+
+// Actualiza múltiples cuotas registradas en una sola llamada API.
+async function updateCuotasRegistradasBatch(cuotaUpdates) {
+  if (cuotaUpdates.length === 0) return;
+  const data = cuotaUpdates.map(({ row, count }) => ({
+    range: `Cuotas!L${row}`,
+    values: [[count]],
+  }));
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId: config.sheetId,
+    requestBody: { valueInputOption: 'USER_ENTERED', data },
   });
 }
 
@@ -3420,10 +3451,10 @@ async function registrarOtrosIngresos(month, amount) {
 }
 
 module.exports = {
-  sheets, testConnection, appendTransaction, setupPhase4, setupDashboard, setupDashboardCards, setupEstilos,
+  sheets, testConnection, appendTransaction, appendTransactionsBatch, setupPhase4, setupDashboard, setupDashboardCards, setupEstilos,
   getBalance, getMonthlyTransactions, getGastosFijos, updateGastoFijoMonto, getLastTransactions,
   deleteTransaction, getIncomeStatus, registerIncome, getCurrentIncome, updateIncome, getFlowData,
-  setupCuotas, getCuotas, appendCuota, updateCuotaRegistradas, updateCuotaMonto,
+  setupCuotas, getCuotas, appendCuota, updateCuotaRegistradas, updateCuotasBatch: updateCuotasRegistradasBatch, updateCuotaMonto,
   extendSheetLimits, setupFormatos, getPresupuestos,
   getSharedUnsettled, settleTransaction, setupSaldado, setupFrecuencia,
   setupEstilosDark,
