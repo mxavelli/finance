@@ -795,7 +795,7 @@ async function cmdSaldar(ctx) {
       if ((i + 1) % 5 === 0) keyboard.row();
     }
     if (items.length % 5 !== 0) keyboard.row();
-    keyboard.text('❌ Cancelar', `sal_no:${salId}`);
+    keyboard.text('✅ Saldar todo', `sal_all:${salId}`).text('❌ Cancelar', `sal_no:${salId}`);
 
     await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: keyboard });
   } catch (error) {
@@ -2403,6 +2403,33 @@ bot.callbackQuery(/^sal_ok:(\d+)$/, async (ctx) => {
   } catch (error) {
     console.error('Error saldando transacción:', error.message);
     await ctx.editMessageText('❌ Error saldando la transacción. Revisá los logs.');
+    await ctx.answerCallbackQuery({ text: 'Error al saldar' });
+  }
+});
+
+// Saldar todos de una vez
+bot.callbackQuery(/^sal_all:(\d+)$/, async (ctx) => {
+  const salId = parseInt(ctx.match[1]);
+  const pending = pendingSettle.get(salId);
+
+  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'Solo quien pidió saldar puede confirmar.' });
+
+  const items = pending.items;
+  pendingSettle.delete(salId);
+
+  try {
+    for (const tx of items) {
+      await settleTransaction(tx.row);
+    }
+    await ctx.editMessageText(
+      `✅ *Saldados ${items.length} gastos compartidos*`,
+      { parse_mode: 'Markdown' }
+    );
+    await ctx.answerCallbackQuery({ text: `${items.length} gastos saldados` });
+  } catch (error) {
+    console.error('Error saldando todos:', error.message);
+    await ctx.editMessageText('❌ Error saldando las transacciones. Revisá los logs.');
     await ctx.answerCallbackQuery({ text: 'Error al saldar' });
   }
 });
