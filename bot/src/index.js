@@ -665,8 +665,9 @@ async function cmdCuotas(ctx) {
       return ctx.reply('No hay cuotas registradas.');
     }
 
-    const activas = allCuotas.filter(c => c.cuotasRegistradas < c.cuotasTotales);
-    const completadas = allCuotas.filter(c => c.cuotasRegistradas >= c.cuotasTotales);
+    const userCuotas = filterCuotasForUser(allCuotas, ctx.from.id);
+    const activas = userCuotas.filter(c => c.cuotasRegistradas < c.cuotasTotales);
+    const completadas = userCuotas.filter(c => c.cuotasRegistradas >= c.cuotasTotales);
 
     let text = `💳 *Cuotas*\n\n`;
 
