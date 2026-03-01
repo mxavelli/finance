@@ -2547,7 +2547,21 @@ bot.callbackQuery(/^fijos_ok:(\d+)$/, async (ctx) => {
     // Armar todas las transacciones en batch (evita rate limit)
     const allTx = [];
     for (const g of aRegistrar) {
-      const { pagadoPor, splitMoises, splitOriana } = derivePagador(g.tipo, pending.userId);
+      // Usar pagadoPor del Sheet si existe; sino derivar del userId
+      let pagadoPor, splitMoises, splitOriana;
+      if (g.pagadoPor) {
+        pagadoPor = g.pagadoPor;
+        const tipoLower = (g.tipo || '').toLowerCase();
+        if (tipoLower.includes('compartido')) {
+          splitMoises = 50; splitOriana = 50;
+        } else if (tipoLower.includes('moises')) {
+          splitMoises = 100; splitOriana = 0;
+        } else {
+          splitMoises = 0; splitOriana = 100;
+        }
+      } else {
+        ({ pagadoPor, splitMoises, splitOriana } = derivePagador(g.tipo, pending.userId));
+      }
       let metodo = g.metodoPago;
       if (metodo === 'Tarjeta') {
         const userCards = config.tarjetas[pending.userId] || [];

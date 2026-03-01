@@ -264,7 +264,7 @@ function parseLocalNumber(val) {
 async function getGastosFijos() {
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: config.sheetId,
-    range: 'Gastos Fijos!A2:J',
+    range: 'Gastos Fijos!A2:K',
   });
   const rows = response.data.values || [];
 
@@ -281,6 +281,7 @@ async function getGastosFijos() {
       registrado: (r[7] || '').includes('✅'),
       frecuencia: r[8] || 'Mensual',
       meses: r[9] || '',
+      pagadoPor: r[10] || '',
     }))
     .filter(g => g.descripcion);
 }
