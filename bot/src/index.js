@@ -1253,12 +1253,16 @@ bot.command('cotizacion', async (ctx) => {
       return ctx.reply('Faltan variables de entorno: MOISES_SALARY_USD y MOISES_SALARY_ARS.');
     }
 
-    const tcStr = (ctx.match || '').trim();
+    const parts = (ctx.match || '').trim().split(/\s+/);
+    const tcStr = parts[0] || '';
+    const overrideStr = parts[1] || '';
+
     if (!tcStr) {
       return ctx.reply(
-        'Formato: /cotizacion [tipo de cambio]\n\n' +
-        'Ejemplo: /cotizacion 1350\n\n' +
-        'Calcula automáticamente cuántos USD cambiar y registra los ingresos del mes.'
+        'Formato: /cotizacion [tipo de cambio] [usd a cambiar]\n\n' +
+        'Ejemplo: /cotizacion 1350\n' +
+        'Ejemplo: /cotizacion 1350 1500  ← fuerza 1500 USD a cambiar\n\n' +
+        'El segundo parámetro es opcional. Si no se pone, calcula automáticamente.'
       );
     }
 
@@ -1276,6 +1280,13 @@ bot.command('cotizacion', async (ctx) => {
       return ctx.reply('Cotización inválida.');
     }
 
+    // Parsear override de USD a cambiar (opcional)
+    let mOverrideUsd = null;
+    if (overrideStr) {
+      const parsed = parseFloat(overrideStr.replace(/\./g, '').replace(',', '.'));
+      if (parsed && parsed > 0) mOverrideUsd = parsed;
+    }
+
     const { month, year } = getNowBA();
 
     // Verificar si ya hay ingresos registrados para este mes
@@ -1284,9 +1295,17 @@ bot.command('cotizacion', async (ctx) => {
 
     // Calcular breakdown para Moises
     const mUsdExacto = inc.moisesSalaryArs / tc;
-    const mUsdRedondeado = Math.ceil(mUsdExacto / 50) * 50;
-    const mExtraUsd = mUsdRedondeado - mUsdExacto;
-    const mQuedaDeel = inc.moisesSalaryUsd - mUsdRedondeado;
+    let mUsdRedondeado, mExtraUsd, mQuedaDeel;
+    if (mOverrideUsd) {
+      // Override manual: usar el monto que indicó el usuario
+      mUsdRedondeado = mOverrideUsd;
+      mExtraUsd = 0;
+      mQuedaDeel = inc.moisesSalaryUsd - mUsdRedondeado;
+    } else {
+      mUsdRedondeado = Math.ceil(mUsdExacto / 50) * 50;
+      mExtraUsd = mUsdRedondeado - mUsdExacto;
+      mQuedaDeel = inc.moisesSalaryUsd - mUsdRedondeado;
+    }
 
     // Calcular breakdown para Oriana (si tiene datos)
     let oUsdExacto = 0, oUsdRedondeado = 0, oExtraUsd = 0, oQuedaDeel = 0;
@@ -1324,7 +1343,7 @@ bot.command('cotizacion', async (ctx) => {
       `• Salario: ${fmtMonto(inc.moisesSalaryUsd, 'USD')}\n` +
       `• Salario ARS: ${fmtMonto(inc.moisesSalaryArs, 'ARS')}\n` +
       `• USD exacto: ${fmtMonto(mUsdExacto, 'USD')}\n` +
-      `• USD a cambiar: ${fmtMonto(mUsdRedondeado, 'USD')} (redondeado ↑50)\n` +
+      `• USD a cambiar: ${fmtMonto(mUsdRedondeado, 'USD')} ${mOverrideUsd ? '(manual)' : '(redondeado ↑50)'}\n` +
       `• Queda en Deel: ${fmtMonto(mQuedaDeel, 'USD')}\n`;
 
     if (mExtraUsd > 0.01) {
