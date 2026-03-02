@@ -1280,12 +1280,15 @@ bot.command('cotizacion', async (ctx) => {
       return ctx.reply('Cotización inválida.');
     }
 
-    // Parsear override de USD a cambiar (opcional)
-    let mOverrideUsd = null;
+    // Parsear override de USD a cambiar (opcional, aplica a quien ejecuta el comando)
+    let overrideUsd = null;
     if (overrideStr) {
       const parsed = parseFloat(overrideStr.replace(/\./g, '').replace(',', '.'));
-      if (parsed && parsed > 0) mOverrideUsd = parsed;
+      if (parsed && parsed > 0) overrideUsd = parsed;
     }
+    const isMoises = ctx.from.id === config.moisesId;
+    const mOverrideUsd = isMoises ? overrideUsd : null;
+    const oOverrideUsd = !isMoises ? overrideUsd : null;
 
     const { month, year } = getNowBA();
 
@@ -1297,7 +1300,6 @@ bot.command('cotizacion', async (ctx) => {
     const mUsdExacto = inc.moisesSalaryArs / tc;
     let mUsdRedondeado, mExtraUsd, mQuedaDeel;
     if (mOverrideUsd) {
-      // Override manual: usar el monto que indicó el usuario
       mUsdRedondeado = mOverrideUsd;
       mExtraUsd = 0;
       mQuedaDeel = inc.moisesSalaryUsd - mUsdRedondeado;
@@ -1312,9 +1314,15 @@ bot.command('cotizacion', async (ctx) => {
     const hasOriana = inc.orianaSalaryUsd && inc.orianaSalaryArs;
     if (hasOriana) {
       oUsdExacto = inc.orianaSalaryArs / tc;
-      oUsdRedondeado = Math.ceil(oUsdExacto / 50) * 50;
-      oExtraUsd = oUsdRedondeado - oUsdExacto;
-      oQuedaDeel = inc.orianaSalaryUsd - oUsdRedondeado;
+      if (oOverrideUsd) {
+        oUsdRedondeado = oOverrideUsd;
+        oExtraUsd = 0;
+        oQuedaDeel = inc.orianaSalaryUsd - oUsdRedondeado;
+      } else {
+        oUsdRedondeado = Math.ceil(oUsdExacto / 50) * 50;
+        oExtraUsd = oUsdRedondeado - oUsdExacto;
+        oQuedaDeel = inc.orianaSalaryUsd - oUsdRedondeado;
+      }
     }
 
     const totalExtraUsd = mExtraUsd + oExtraUsd;
@@ -1355,7 +1363,7 @@ bot.command('cotizacion', async (ctx) => {
         `• Salario: ${fmtMonto(inc.orianaSalaryUsd, 'USD')}\n` +
         `• Salario ARS: ${fmtMonto(inc.orianaSalaryArs, 'ARS')}\n` +
         `• USD exacto: ${fmtMonto(oUsdExacto, 'USD')}\n` +
-        `• USD a cambiar: ${fmtMonto(oUsdRedondeado, 'USD')} (redondeado ↑50)\n` +
+        `• USD a cambiar: ${fmtMonto(oUsdRedondeado, 'USD')} ${oOverrideUsd ? '(manual)' : '(redondeado ↑50)'}\n` +
         `• Queda en Deel: ${fmtMonto(oQuedaDeel, 'USD')}\n`;
 
       if (oExtraUsd > 0.01) {
