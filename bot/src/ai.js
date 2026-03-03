@@ -59,7 +59,7 @@ Devolvé SOLO un JSON válido con estos campos:
   * Tarjetas de crédito del usuario: ${cardsList} (usá el nombre EXACTO si se menciona alguna)
   * "Banco" (transferencia, débito, cuenta bancaria)
   * "Efectivo" (cash, plata en mano)
-  * "Deel Card" (tarjeta Deel para pagos en ARS — NO confundir con Deel Visa que es tarjeta de crédito)
+  * "Deel Card" (tarjeta Deel para pagos en ARS — si dicen "deel" o "deel visa", siempre usar "Deel Card")
   * "Deel USD" (pago en dólares desde Deel)
   Si el usuario dice "tarjeta" o "crédito" sin especificar cuál, poné "Tarjeta".
   Si no se menciona método de pago, poné null.

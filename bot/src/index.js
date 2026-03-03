@@ -1431,7 +1431,7 @@ function buildTxFromAi(aiResult, senderId) {
       const mp = metodoPago.toLowerCase();
       if (mp.includes('efectivo')) metodoPago = 'Efectivo';
       else if (mp.includes('deel') && mp.includes('usd')) metodoPago = 'Deel USD';
-      else if (mp === 'deel card' || mp === 'deel') metodoPago = 'Deel Card';
+      else if (mp.includes('deel')) metodoPago = 'Deel Card';
       else if (mp.includes('banco') || mp.includes('debito') || mp.includes('débito') || mp.includes('transferencia')) metodoPago = 'Banco';
       else if (mp.includes('tarjeta') || mp.includes('credito') || mp.includes('crédito') || mp.includes('visa') || mp.includes('master')) {
         // Intentar resolver a tarjeta específica por marca

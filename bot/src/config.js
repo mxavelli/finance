@@ -38,10 +38,10 @@ module.exports = {
   },
   // Tarjetas de crédito por usuario
   tarjetas: {
-    [parseInt(process.env.MOISES_TELEGRAM_ID)]: ['Visa Galicia', 'Master Galicia', 'Deel Visa'],
-    [parseInt(process.env.ORIANA_TELEGRAM_ID)]: ['Visa BBVA', 'Master BBVA', 'Deel Visa'],
+    [parseInt(process.env.MOISES_TELEGRAM_ID)]: ['Visa Galicia', 'Master Galicia'],
+    [parseInt(process.env.ORIANA_TELEGRAM_ID)]: ['Visa BBVA', 'Master BBVA'],
   },
-  todasLasTarjetas: ['Visa Galicia', 'Master Galicia', 'Visa BBVA', 'Master BBVA', 'Deel Visa'],
+  todasLasTarjetas: ['Visa Galicia', 'Master Galicia', 'Visa BBVA', 'Master BBVA'],
   // Día de cierre de tarjetas de crédito (para calcular primera cuota)
   // 0 = no configurado → primera cuota siempre mes siguiente
   cierreTarjetas: {
@@ -49,7 +49,6 @@ module.exports = {
     'Master Galicia': parseInt(process.env.CIERRE_GALICIA) || 0,
     'Visa BBVA': parseInt(process.env.CIERRE_BBVA) || 0,
     'Master BBVA': parseInt(process.env.CIERRE_BBVA) || 0,
-    'Deel Visa': parseInt(process.env.CIERRE_DEEL) || 0,
   },
   openaiApiKey,
 };
