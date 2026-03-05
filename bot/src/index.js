@@ -20,6 +20,19 @@ const { transcribeAudio, parseExpense, analyzeReceipt, isConfigured: isAiConfigu
 
 const bot = new Bot(config.botToken);
 
+// Middleware de seguridad: solo usuarios autorizados pueden usar el bot
+const AUTHORIZED_USERS = new Set([config.moisesId, config.orianaId]);
+bot.use(async (ctx, next) => {
+  const userId = ctx.from?.id;
+  if (!userId || !AUTHORIZED_USERS.has(userId)) {
+    if (ctx.message) {
+      await ctx.reply('No tenés acceso a este bot.');
+    }
+    return;
+  }
+  return next();
+});
+
 // Verifica si un metodo de pago es una tarjeta de credito (especifica o legacy "Tarjeta")
 function isTarjeta(metodo) {
   return metodo === 'Tarjeta' || config.todasLasTarjetas.includes(metodo);
@@ -1547,6 +1560,7 @@ async function showAiTxPreview(ctx, tx, emoji) {
       if (i % 2 === 1) keyboard.row();
     }
     if (userCards.length % 2 === 1) keyboard.row();
+    keyboard.text('💳 Deel Card', `card_deel_${txId}`).row();
     keyboard.text('🔄 Compartido', `photo_shared:${txId}`).row();
     keyboard.text('❌ Cancelar', `tx_no:${txId}`);
 
@@ -2191,6 +2205,7 @@ bot.callbackQuery(/^mg_pay:(\d+):(\d+)$/, async (ctx) => {
       if (i % 2 === 1) kb.row();
     });
     if (userCards.length % 2 === 1) kb.row();
+    kb.text('💳 Deel Card', `mg_crd_deel:${manualId}`).row();
     kb.text('❌ Cancelar', `mg_no:${manualId}`);
 
     await ctx.editMessageText(
@@ -2248,6 +2263,35 @@ bot.callbackQuery(/^mg_crd:(\d+):(\d+)$/, async (ctx) => {
     `📝 ${pending.data.descripcion}\n` +
     `💰 ${formatAmount(pending.data.monto, pending.data.moneda)}\n` +
     `💳 ${pending.data.metodoPago}\n\n` +
+    `Elegí el tipo:`,
+    { parse_mode: 'Markdown', reply_markup: kb }
+  );
+  await ctx.answerCallbackQuery();
+});
+
+// Selección de Deel Card desde submenu de tarjetas (flujo manual)
+bot.callbackQuery(/^mg_crd_deel:(\d+)$/, async (ctx) => {
+  const manualId = parseInt(ctx.match[1]);
+  const pending = pendingManual.get(ctx.from.id);
+
+  if (!pending || pending.id !== manualId)
+    return ctx.answerCallbackQuery({ text: 'Expirado.' });
+
+  pending.data.metodoPago = 'Deel Card';
+  pending.step = 'type';
+
+  const kb = new InlineKeyboard()
+    .text('👤 Individual', `mg_type:${manualId}:individual`)
+    .text('👥 Compartido', `mg_type:${manualId}:compartido`)
+    .row()
+    .text('❌ Cancelar', `mg_no:${manualId}`);
+
+  await ctx.editMessageText(
+    `📋 *Nuevo gasto — Paso 6/6*\n\n` +
+    `🏷️ ${pending.data.categoria}\n` +
+    `📝 ${pending.data.descripcion}\n` +
+    `💰 ${formatAmount(pending.data.monto, pending.data.moneda)}\n` +
+    `💳 Deel Card\n\n` +
     `Elegí el tipo:`,
     { parse_mode: 'Markdown', reply_markup: kb }
   );
@@ -2399,6 +2443,35 @@ bot.callbackQuery(/^card_(\d+)_(\d+)$/, async (ctx) => {
   }
 });
 
+// Seleccion de Deel Card desde submenu de tarjetas (foto/audio)
+bot.callbackQuery(/^card_deel_(\d+)$/, async (ctx) => {
+  const txId = parseInt(ctx.match[1]);
+  const tx = pendingTx.get(txId);
+
+  if (!tx) return ctx.answerCallbackQuery({ text: 'Transacción expirada.' });
+  if (ctx.from.id !== tx.userId) return ctx.answerCallbackQuery({ text: 'Solo quien registró puede confirmar.' });
+
+  tx.metodoPago = 'Deel Card';
+  pendingTx.delete(txId);
+
+  try {
+    await appendTransaction(tx);
+    await ctx.editMessageText(
+      `✅ *Guardada*\n\n` +
+      `📋 ${tx.descripcion}\n` +
+      `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+      `🏷️ ${tx.categoria}\n` +
+      `💳 Deel Card`,
+      { parse_mode: 'Markdown' }
+    );
+    await ctx.answerCallbackQuery({ text: 'Guardada — Deel Card' });
+  } catch (error) {
+    console.error('Error guardando transacción:', error.message);
+    await ctx.editMessageText('❌ Error guardando en Google Sheets. Revisá los logs.');
+    await ctx.answerCallbackQuery({ text: 'Error al guardar' });
+  }
+});
+
 // Seleccion de tarjeta para compra en cuotas (guarda en hoja Cuotas, no Transacciones)
 bot.callbackQuery(/^cuota_card_(\d+)_(\d+)$/, async (ctx) => {
   const cardIdx = parseInt(ctx.match[1]);
@@ -2539,6 +2612,7 @@ bot.callbackQuery(/^ap:(\d+):(\d+)$/, async (ctx) => {
       if (i % 2 === 1) keyboard.row();
     }
     if (userCards.length % 2 === 1) keyboard.row();
+    keyboard.text('💳 Deel Card', `card_deel_${txId}`).row();
     keyboard.text('❌ Cancelar', `tx_no:${txId}`);
 
     const preview =
