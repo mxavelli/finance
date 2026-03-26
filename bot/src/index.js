@@ -81,7 +81,8 @@ const mainMenu = new Keyboard()
   .text('📝 Últimas').text('🔄 Cuotas').row()
   .text('💵 Flujo').text('🗑 Borrar').row()
   .text('🤝 Saldar').text('💎 Crypto').row()
-  .text('📈 Inversiones').text('❓ Ayuda').row()
+  .text('📈 Inversiones').text('🔮 Próximo').row()
+  .text('❓ Ayuda').row()
   .resized().persistent();
 
 // Mapeo botón del menú → nombre de comando
@@ -97,6 +98,7 @@ const MENU_MAP = {
   '🤝 Saldar':     'saldar',
   '💎 Crypto':     'crypto',
   '📈 Inversiones': 'inversiones',
+  '🔮 Próximo':    'proximo',
   '❓ Ayuda':      'start',
 };
 
@@ -720,6 +722,146 @@ async function cmdCuotas(ctx) {
 }
 bot.command('cuotas', cmdCuotas);
 
+// /proximo — estimación de pago de tarjetas del mes próximo
+async function cmdProximo(ctx) {
+  try {
+    const userId = ctx.from.id;
+    const esMoises = userId === config.moisesId;
+    const quien = esMoises ? 'Moises' : 'Oriana';
+    const { month, year } = getNowBA();
+
+    // Mes siguiente
+    const nextMonth = month === 12 ? 1 : month + 1;
+    const nextYear = month === 12 ? year + 1 : year;
+
+    // 1. Gastos fijos con tarjeta (filtrados por usuario y frecuencia)
+    const allGastos = await getGastosFijos();
+    const gastosTarjeta = filterGastosByFrequency(
+      filterGastosForUser(allGastos.filter(g => isTarjeta(g.metodoPago)), userId),
+      nextMonth
+    );
+
+    // 2. Cuotas pendientes para el mes siguiente
+    const allCuotas = await getCuotas();
+    const userCuotas = filterCuotasForUser(allCuotas, userId);
+    const cuotasProximo = [];
+    for (const c of userCuotas) {
+      if (!c.primeraCuota || c.cuotasRegistradas >= c.cuotasTotales) continue;
+      const primera = parseMesAnio(c.primeraCuota);
+      const diff = monthsDiff(primera, { month: nextMonth, year: nextYear });
+      if (diff < 0 || diff >= c.cuotasTotales) continue;
+      cuotasProximo.push({ ...c, cuotaNumero: diff + 1 });
+    }
+
+    // 3. Consumos variables del mes actual con tarjeta (usuario)
+    const transactions = await getMonthlyTransactions(month, year);
+    const tarjetasUsuario = esMoises
+      ? config.tarjetas[config.moisesId]
+      : config.tarjetas[config.orianaId];
+    const consumosVar = transactions.filter(tx => {
+      if (!tarjetasUsuario.includes(tx.metodoPago)) return false;
+      // Excluir gastos fijos y cuotas ya contados arriba
+      const notas = (tx.notas || '').toLowerCase();
+      if (notas.includes('gasto fijo') || notas.includes('cuota')) return false;
+      return true;
+    });
+
+    // Agrupar todo por tarjeta
+    const porTarjeta = {};
+    function addToCard(card, moneda, monto, label) {
+      const key = card;
+      if (!porTarjeta[key]) porTarjeta[key] = { ars: 0, usd: 0, items: [] };
+      if (moneda === 'USD') porTarjeta[key].usd += monto;
+      else porTarjeta[key].ars += monto;
+      porTarjeta[key].items.push(label);
+    }
+
+    for (const g of gastosTarjeta) {
+      addToCard(g.metodoPago, g.moneda, g.montoEstimado, `${g.descripcion} — ${fmtMonto(g.montoEstimado, g.moneda)}`);
+    }
+    for (const c of cuotasProximo) {
+      addToCard(c.tarjeta, c.moneda, c.montoCuota, `${c.descripcion} (${c.cuotaNumero}/${c.cuotasTotales}) — ${fmtMonto(c.montoCuota, c.moneda)}`);
+    }
+    for (const tx of consumosVar) {
+      addToCard(tx.metodoPago, tx.moneda, tx.monto, `${tx.descripcion} — ${fmtMonto(tx.monto, tx.moneda)}`);
+    }
+
+    const mesLabel = `${MESES_CORTO[nextMonth - 1]} ${nextYear}`;
+    let text = `🔮 *Estimación tarjetas ${mesLabel} — ${quien}*\n\n`;
+
+    if (Object.keys(porTarjeta).length === 0) {
+      text += 'No hay gastos estimados con tarjeta para el próximo mes.';
+      return ctx.reply(text, { parse_mode: 'Markdown' });
+    }
+
+    let grandTotalArs = 0, grandTotalUsd = 0;
+
+    for (const [card, data] of Object.entries(porTarjeta).sort((a, b) => (b[1].ars + b[1].usd * 1000) - (a[1].ars + a[1].usd * 1000))) {
+      text += `*${card}:*\n`;
+
+      // Desglose fijos
+      const fijosCard = gastosTarjeta.filter(g => g.metodoPago === card);
+      if (fijosCard.length > 0) {
+        const totalFijosArs = fijosCard.filter(g => g.moneda !== 'USD').reduce((s, g) => s + g.montoEstimado, 0);
+        const totalFijosUsd = fijosCard.filter(g => g.moneda === 'USD').reduce((s, g) => s + g.montoEstimado, 0);
+        text += `  📋 Gastos fijos (${fijosCard.length}):`;
+        if (totalFijosArs > 0) text += ` ${fmtMonto(totalFijosArs, 'ARS')}`;
+        if (totalFijosUsd > 0) text += ` ${fmtMonto(totalFijosUsd, 'USD')}`;
+        text += '\n';
+        for (const g of fijosCard) {
+          text += `    • ${g.descripcion} — ${fmtMonto(g.montoEstimado, g.moneda)}\n`;
+        }
+      }
+
+      // Desglose cuotas
+      const cuotasCard = cuotasProximo.filter(c => c.tarjeta === card);
+      if (cuotasCard.length > 0) {
+        const totalCuotasArs = cuotasCard.filter(c => c.moneda !== 'USD').reduce((s, c) => s + c.montoCuota, 0);
+        const totalCuotasUsd = cuotasCard.filter(c => c.moneda === 'USD').reduce((s, c) => s + c.montoCuota, 0);
+        text += `  🔄 Cuotas (${cuotasCard.length}):`;
+        if (totalCuotasArs > 0) text += ` ${fmtMonto(totalCuotasArs, 'ARS')}`;
+        if (totalCuotasUsd > 0) text += ` ${fmtMonto(totalCuotasUsd, 'USD')}`;
+        text += '\n';
+        for (const c of cuotasCard) {
+          text += `    • ${c.descripcion} (${c.cuotaNumero}/${c.cuotasTotales}) — ${fmtMonto(c.montoCuota, c.moneda)}\n`;
+        }
+      }
+
+      // Desglose consumos variables
+      const varCard = consumosVar.filter(tx => tx.metodoPago === card);
+      if (varCard.length > 0) {
+        const totalVarArs = varCard.filter(tx => tx.moneda !== 'USD').reduce((s, tx) => s + tx.monto, 0);
+        const totalVarUsd = varCard.filter(tx => tx.moneda === 'USD').reduce((s, tx) => s + tx.monto, 0);
+        text += `  🛒 Consumos ${MESES_CORTO[month - 1]} (${varCard.length}):`;
+        if (totalVarArs > 0) text += ` ${fmtMonto(totalVarArs, 'ARS')}`;
+        if (totalVarUsd > 0) text += ` ${fmtMonto(totalVarUsd, 'USD')}`;
+        text += '\n';
+      }
+
+      // Subtotal tarjeta
+      text += `  💰 *Subtotal:*`;
+      if (data.ars > 0) text += ` ${fmtMonto(data.ars, 'ARS')}`;
+      if (data.usd > 0) text += ` ${fmtMonto(data.usd, 'USD')}`;
+      text += '\n\n';
+
+      grandTotalArs += data.ars;
+      grandTotalUsd += data.usd;
+    }
+
+    text += `🏦 *TOTAL ESTIMADO:*`;
+    if (grandTotalArs > 0) text += ` ${fmtMonto(grandTotalArs, 'ARS')}`;
+    if (grandTotalUsd > 0) text += ` + ${fmtMonto(grandTotalUsd, 'USD')}`;
+
+    text += `\n\n_Nota: consumos variables se basan en ${MESES_CORTO[month - 1]}, sin considerar fecha de cierre exacta._`;
+
+    await ctx.reply(text, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('Error en /proximo:', error.message);
+    ctx.reply('Error estimando tarjetas del próximo mes. Revisá los logs.');
+  }
+}
+bot.command('proximo', cmdProximo);
+
 // /borrar — muestra ultimas transacciones para elegir cual borrar
 async function cmdBorrar(ctx) {
   try {
@@ -1189,6 +1331,7 @@ const CMD_HANDLERS = {
   saldar: cmdSaldar,
   crypto: cmdCrypto,
   inversiones: cmdInversiones,
+  proximo: cmdProximo,
 };
 
 // /ingreso [monto] [descripcion] — registrar ingreso extra

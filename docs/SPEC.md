@@ -415,6 +415,7 @@ Archivo `.env` en la **raíz del proyecto** (no en `bot/`).
 | `/crypto` | Portafolio crypto: ver holdings con precio live, registrar compras/ventas |
 | `/inversiones` | Portafolio inversiones (PPI): ver total y composición, actualizar valor y porcentajes |
 | `/pago_tarjeta` | Registrar el TOTAL A PAGAR de un resumen de tarjeta de crédito. Uso: `/pago_tarjeta Visa Galicia 1085559.70 [mes]` |
+| `/proximo` | Estimación de pago de tarjetas del mes próximo: gastos fijos, cuotas y consumos variables, desglosado por tarjeta |
 | Texto libre | Parsea como transacción, muestra preview con botones |
 | ✅ Confirmar | Guarda la transacción en Google Sheets |
 | ❌ Cancelar | Descarta la transacción |
