@@ -180,12 +180,12 @@ async function getBalance() {
     const r = rows[i];
     meses.push({
       mes: r[0] || '',
-      total: parseFloat(r[1]) || 0,
-      pagoMoises: parseFloat(r[2]) || 0,
-      pagoOriana: parseFloat(r[3]) || 0,
-      corrMoises: parseFloat(r[4]) || 0,
-      corrOriana: parseFloat(r[5]) || 0,
-      balance: parseFloat(r[6]) || 0,
+      total: parseLocalNumber(r[1]),
+      pagoMoises: parseLocalNumber(r[2]),
+      pagoOriana: parseLocalNumber(r[3]),
+      corrMoises: parseLocalNumber(r[4]),
+      corrOriana: parseLocalNumber(r[5]),
+      balance: parseLocalNumber(r[6]),
       resultado: r[7] || '',
     });
   }
@@ -197,8 +197,8 @@ async function getBalance() {
   return {
     meses,
     totalAnual: {
-      total: parseFloat(totalRow[1]) || 0,
-      balance: parseFloat(totalRow[6]) || 0,
+      total: parseLocalNumber(totalRow[1]),
+      balance: parseLocalNumber(totalRow[6]),
       resultado: totalRow[7] || '',
     },
     saldoAcumulado: saldoRow[1] || '',
@@ -221,13 +221,13 @@ async function getMonthlyTransactions(month, year) {
       hora: r[1] || '',
       descripcion: r[2] || '',
       categoria: r[3] || '',
-      monto: parseFloat(r[4]) || 0,
+      monto: parseLocalNumber(r[4]),
       moneda: r[5] || '',
       metodoPago: r[6] || '',
       tipo: r[7] || '',
       pagadoPor: r[8] || '',
-      splitMoises: parseFloat(r[9]) || 0,
-      splitOriana: parseFloat(r[10]) || 0,
+      splitMoises: parseLocalNumber(r[9]),
+      splitOriana: parseLocalNumber(r[10]),
       notas: r[11] || '',
     }))
     .filter(tx => {
@@ -315,7 +315,7 @@ async function getLastTransactions(n = 5) {
         hora: r[1] || '',
         descripcion: r[2] || '',
         categoria: r[3] || '',
-        monto: parseFloat(r[4]) || 0,
+        monto: parseLocalNumber(r[4]),
         moneda: r[5] || '',
         metodoPago: r[6] || '',
         tipo: r[7] || '',
@@ -2255,12 +2255,12 @@ async function getSharedUnsettled() {
       row: i + 2,
       fecha: r[0] || '',
       descripcion: r[2] || '',
-      monto: parseFloat(r[4]) || 0,
+      monto: parseLocalNumber(r[4]),
       moneda: r[5] || '',
       tipo: r[7] || '',
       pagadoPor: r[8] || '',
-      splitMoises: parseFloat(r[9]) || 0,
-      splitOriana: parseFloat(r[10]) || 0,
+      splitMoises: parseLocalNumber(r[9]),
+      splitOriana: parseLocalNumber(r[10]),
       saldado: r[16] || '',
     }))
     .filter(tx => tx.fecha && tx.tipo === 'Compartido' && tx.moneda === 'ARS' && tx.saldado !== 'Sí')
