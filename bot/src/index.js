@@ -766,24 +766,28 @@ async function cmdProximo(ctx) {
       return true;
     });
 
-    // Agrupar todo por tarjeta
+    // Agrupar totales por tarjeta
     const porTarjeta = {};
-    function addToCard(card, moneda, monto, label) {
-      const key = card;
-      if (!porTarjeta[key]) porTarjeta[key] = { ars: 0, usd: 0, items: [] };
-      if (moneda === 'USD') porTarjeta[key].usd += monto;
-      else porTarjeta[key].ars += monto;
-      porTarjeta[key].items.push(label);
+    function addToCard(card, moneda, monto) {
+      if (!porTarjeta[card]) porTarjeta[card] = { ars: 0, usd: 0, fijos: 0, cuotas: 0, consumos: 0 };
+      if (moneda === 'USD') porTarjeta[card].usd += monto;
+      else porTarjeta[card].ars += monto;
     }
 
     for (const g of gastosTarjeta) {
-      addToCard(g.metodoPago, g.moneda, g.montoEstimado, `${g.descripcion} — ${fmtMonto(g.montoEstimado, g.moneda)}`);
+      addToCard(g.metodoPago, g.moneda, g.montoEstimado);
+      if (!porTarjeta[g.metodoPago]) porTarjeta[g.metodoPago] = { ars: 0, usd: 0, fijos: 0, cuotas: 0, consumos: 0 };
+      porTarjeta[g.metodoPago].fijos++;
     }
     for (const c of cuotasProximo) {
-      addToCard(c.tarjeta, c.moneda, c.montoCuota, `${c.descripcion} (${c.cuotaNumero}/${c.cuotasTotales}) — ${fmtMonto(c.montoCuota, c.moneda)}`);
+      addToCard(c.tarjeta, c.moneda, c.montoCuota);
+      if (!porTarjeta[c.tarjeta]) porTarjeta[c.tarjeta] = { ars: 0, usd: 0, fijos: 0, cuotas: 0, consumos: 0 };
+      porTarjeta[c.tarjeta].cuotas++;
     }
     for (const tx of consumosVar) {
-      addToCard(tx.metodoPago, tx.moneda, tx.monto, `${tx.descripcion} — ${fmtMonto(tx.monto, tx.moneda)}`);
+      addToCard(tx.metodoPago, tx.moneda, tx.monto);
+      if (!porTarjeta[tx.metodoPago]) porTarjeta[tx.metodoPago] = { ars: 0, usd: 0, fijos: 0, cuotas: 0, consumos: 0 };
+      porTarjeta[tx.metodoPago].consumos++;
     }
 
     const mesLabel = `${MESES_CORTO[nextMonth - 1]} ${nextYear}`;
@@ -797,52 +801,14 @@ async function cmdProximo(ctx) {
     let grandTotalArs = 0, grandTotalUsd = 0;
 
     for (const [card, data] of Object.entries(porTarjeta).sort((a, b) => (b[1].ars + b[1].usd * 1000) - (a[1].ars + a[1].usd * 1000))) {
-      text += `*${card}:*\n`;
-
-      // Desglose fijos
-      const fijosCard = gastosTarjeta.filter(g => g.metodoPago === card);
-      if (fijosCard.length > 0) {
-        const totalFijosArs = fijosCard.filter(g => g.moneda !== 'USD').reduce((s, g) => s + g.montoEstimado, 0);
-        const totalFijosUsd = fijosCard.filter(g => g.moneda === 'USD').reduce((s, g) => s + g.montoEstimado, 0);
-        text += `  📋 Gastos fijos (${fijosCard.length}):`;
-        if (totalFijosArs > 0) text += ` ${fmtMonto(totalFijosArs, 'ARS')}`;
-        if (totalFijosUsd > 0) text += ` ${fmtMonto(totalFijosUsd, 'USD')}`;
-        text += '\n';
-        for (const g of fijosCard) {
-          text += `    • ${g.descripcion} — ${fmtMonto(g.montoEstimado, g.moneda)}\n`;
-        }
-      }
-
-      // Desglose cuotas
-      const cuotasCard = cuotasProximo.filter(c => c.tarjeta === card);
-      if (cuotasCard.length > 0) {
-        const totalCuotasArs = cuotasCard.filter(c => c.moneda !== 'USD').reduce((s, c) => s + c.montoCuota, 0);
-        const totalCuotasUsd = cuotasCard.filter(c => c.moneda === 'USD').reduce((s, c) => s + c.montoCuota, 0);
-        text += `  🔄 Cuotas (${cuotasCard.length}):`;
-        if (totalCuotasArs > 0) text += ` ${fmtMonto(totalCuotasArs, 'ARS')}`;
-        if (totalCuotasUsd > 0) text += ` ${fmtMonto(totalCuotasUsd, 'USD')}`;
-        text += '\n';
-        for (const c of cuotasCard) {
-          text += `    • ${c.descripcion} (${c.cuotaNumero}/${c.cuotasTotales}) — ${fmtMonto(c.montoCuota, c.moneda)}\n`;
-        }
-      }
-
-      // Desglose consumos variables
-      const varCard = consumosVar.filter(tx => tx.metodoPago === card);
-      if (varCard.length > 0) {
-        const totalVarArs = varCard.filter(tx => tx.moneda !== 'USD').reduce((s, tx) => s + tx.monto, 0);
-        const totalVarUsd = varCard.filter(tx => tx.moneda === 'USD').reduce((s, tx) => s + tx.monto, 0);
-        text += `  🛒 Consumos ${MESES_CORTO[month - 1]} (${varCard.length}):`;
-        if (totalVarArs > 0) text += ` ${fmtMonto(totalVarArs, 'ARS')}`;
-        if (totalVarUsd > 0) text += ` ${fmtMonto(totalVarUsd, 'USD')}`;
-        text += '\n';
-      }
-
-      // Subtotal tarjeta
-      text += `  💰 *Subtotal:*`;
+      text += `*${card}:*`;
       if (data.ars > 0) text += ` ${fmtMonto(data.ars, 'ARS')}`;
-      if (data.usd > 0) text += ` ${fmtMonto(data.usd, 'USD')}`;
-      text += '\n\n';
+      if (data.usd > 0) text += ` + ${fmtMonto(data.usd, 'USD')}`;
+      const detalles = [];
+      if (data.fijos > 0) detalles.push(`${data.fijos} fijos`);
+      if (data.cuotas > 0) detalles.push(`${data.cuotas} cuotas`);
+      if (data.consumos > 0) detalles.push(`${data.consumos} consumos`);
+      text += `\n  _${detalles.join(' + ')}_\n\n`;
 
       grandTotalArs += data.ars;
       grandTotalUsd += data.usd;
@@ -852,7 +818,7 @@ async function cmdProximo(ctx) {
     if (grandTotalArs > 0) text += ` ${fmtMonto(grandTotalArs, 'ARS')}`;
     if (grandTotalUsd > 0) text += ` + ${fmtMonto(grandTotalUsd, 'USD')}`;
 
-    text += `\n\n_Nota: consumos variables se basan en ${MESES_CORTO[month - 1]}, sin considerar fecha de cierre exacta._`;
+    text += `\n\n_Consumos variables basados en ${MESES_CORTO[month - 1]}._`;
 
     await ctx.reply(text, { parse_mode: 'Markdown' });
   } catch (error) {
