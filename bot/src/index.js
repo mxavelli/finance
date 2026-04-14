@@ -3050,12 +3050,41 @@ function buildFijosText(gastos) {
   return text;
 }
 
+// Helper: reconstruir estado pendiente de gastos fijos desde el Sheet.
+// Cuando el bot se reinicia, pendingFijos (en memoria) se pierde.
+// En vez de devolver "Expirado", reconstruimos la lista de pendientes.
+async function reconstructPendingFijos(fijoId, userId) {
+  const { month, year } = getNowBA();
+  const [gastos, cuotas] = await Promise.all([getGastosFijos(), getCuotas()]);
+  const pendientesGF = filterGastosForUser(
+    filterGastosByFrequency(gastos.filter(g => !g.registrado), month), userId
+  );
+  const pendientesCuotas = filterCuotasForUser(
+    getPendingCuotasForMonth(cuotas, month, year), userId
+  );
+  if (pendientesGF.length === 0 && pendientesCuotas.length === 0) return null;
+  const pending = { gastos: pendientesGF, cuotas: pendientesCuotas, userId, createdAt: Date.now() };
+  pendingFijos.set(fijoId, pending);
+  return pending;
+}
+
 // Registrar todos los gastos fijos pendientes
 bot.callbackQuery(/^fijos_ok:(\d+)$/, async (ctx) => {
   const fijoId = parseInt(ctx.match[1]);
-  const pending = pendingFijos.get(fijoId);
+  let pending = pendingFijos.get(fijoId);
 
-  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (!pending) {
+    try {
+      pending = await reconstructPendingFijos(fijoId, ctx.from.id);
+    } catch (err) {
+      console.error('Error reconstruyendo pendientes:', err.message);
+      return ctx.answerCallbackQuery({ text: 'Error, intentá de nuevo.' });
+    }
+    if (!pending) {
+      await ctx.editMessageText('✅ Todos tus gastos fijos y cuotas del mes ya están registrados.');
+      return ctx.answerCallbackQuery({ text: 'Ya estaban registrados' });
+    }
+  }
   if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'Solo quien inició puede confirmar.' });
 
   pendingFijos.delete(fijoId);
@@ -3186,9 +3215,20 @@ bot.callbackQuery(/^fijos_ok:(\d+)$/, async (ctx) => {
 // Entrar en modo edicion de monto
 bot.callbackQuery(/^fijos_edit:(\d+)$/, async (ctx) => {
   const fijoId = parseInt(ctx.match[1]);
-  const pending = pendingFijos.get(fijoId);
+  let pending = pendingFijos.get(fijoId);
 
-  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (!pending) {
+    try {
+      pending = await reconstructPendingFijos(fijoId, ctx.from.id);
+    } catch (err) {
+      console.error('Error reconstruyendo pendientes:', err.message);
+      return ctx.answerCallbackQuery({ text: 'Error, intentá de nuevo.' });
+    }
+    if (!pending) {
+      await ctx.editMessageText('✅ Todos tus gastos fijos y cuotas del mes ya están registrados.');
+      return ctx.answerCallbackQuery({ text: 'Ya estaban registrados' });
+    }
+  }
   if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'Solo quien inició puede editar.' });
 
   const cuotasArr = pending.cuotas || [];
@@ -3212,9 +3252,20 @@ bot.callbackQuery(/^fijos_edit:(\d+)$/, async (ctx) => {
 bot.callbackQuery(/^fijos_pick:(\d+):(\d+)$/, async (ctx) => {
   const fijoId = parseInt(ctx.match[1]);
   const idx = parseInt(ctx.match[2]);
-  const pending = pendingFijos.get(fijoId);
+  let pending = pendingFijos.get(fijoId);
 
-  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (!pending) {
+    try {
+      pending = await reconstructPendingFijos(fijoId, ctx.from.id);
+    } catch (err) {
+      console.error('Error reconstruyendo pendientes:', err.message);
+      return ctx.answerCallbackQuery({ text: 'Error, intentá de nuevo.' });
+    }
+    if (!pending) {
+      await ctx.editMessageText('✅ Todos tus gastos fijos y cuotas del mes ya están registrados.');
+      return ctx.answerCallbackQuery({ text: 'Ya estaban registrados' });
+    }
+  }
   if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'Solo quien inició puede editar.' });
 
   const gastosCount = pending.gastos.length;
@@ -3255,9 +3306,20 @@ bot.callbackQuery(/^fijos_pick:(\d+):(\d+)$/, async (ctx) => {
 // Volver al listado desde edicion
 bot.callbackQuery(/^fijos_back:(\d+)$/, async (ctx) => {
   const fijoId = parseInt(ctx.match[1]);
-  const pending = pendingFijos.get(fijoId);
+  let pending = pendingFijos.get(fijoId);
 
-  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (!pending) {
+    try {
+      pending = await reconstructPendingFijos(fijoId, ctx.from.id);
+    } catch (err) {
+      console.error('Error reconstruyendo pendientes:', err.message);
+      return ctx.answerCallbackQuery({ text: 'Error, intentá de nuevo.' });
+    }
+    if (!pending) {
+      await ctx.editMessageText('✅ Todos tus gastos fijos y cuotas del mes ya están registrados.');
+      return ctx.answerCallbackQuery({ text: 'Ya estaban registrados' });
+    }
+  }
 
   // Limpiar estado de edicion
   pendingFixedEdit.delete(ctx.from.id);
