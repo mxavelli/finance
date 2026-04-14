@@ -1670,7 +1670,8 @@ async function showAiTxPreview(ctx, tx, emoji) {
     }
     if (userCards.length % 2 === 1) keyboard.row();
     keyboard.text('💳 Deel Card', `card_deel_${txId}`).row();
-    keyboard.text('🔄 Compartido', `photo_shared:${txId}`).row();
+    keyboard.text('🔄 Compartido', `photo_shared:${txId}`)
+      .text('💰 Otro método', `ap_change:${txId}`).row();
     keyboard.text('❌ Cancelar', `tx_no:${txId}`);
 
     return ctx.reply(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
@@ -1692,6 +1693,7 @@ async function showAiTxPreview(ctx, tx, emoji) {
     .text('✅ Confirmar', `tx_ok:${txId}`)
     .text('🔄 Compartido', `photo_shared:${txId}`)
     .row()
+    .text('💰 Cambiar método', `ap_change:${txId}`)
     .text('❌ Cancelar', `tx_no:${txId}`);
 
   return ctx.reply(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
@@ -2722,6 +2724,8 @@ bot.callbackQuery(/^ap:(\d+):(\d+)$/, async (ctx) => {
     }
     if (userCards.length % 2 === 1) keyboard.row();
     keyboard.text('💳 Deel Card', `card_deel_${txId}`).row();
+    keyboard.text('🔄 Compartido', `photo_shared:${txId}`)
+      .text('💰 Otro método', `ap_change:${txId}`).row();
     keyboard.text('❌ Cancelar', `tx_no:${txId}`);
 
     const preview =
@@ -2755,10 +2759,41 @@ bot.callbackQuery(/^ap:(\d+):(\d+)$/, async (ctx) => {
     .text('✅ Confirmar', `tx_ok:${txId}`)
     .text('🔄 Compartido', `photo_shared:${txId}`)
     .row()
+    .text('💰 Cambiar método', `ap_change:${txId}`)
     .text('❌ Cancelar', `tx_no:${txId}`);
 
   await ctx.editMessageText(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
   await ctx.answerCallbackQuery({ text: metodo });
+});
+
+// Cambiar método de pago (volver a la selección de 4 opciones)
+bot.callbackQuery(/^ap_change:(\d+)$/, async (ctx) => {
+  const txId = parseInt(ctx.match[1]);
+  const tx = pendingTx.get(txId);
+
+  if (!tx) return ctx.answerCallbackQuery({ text: 'Transacción expirada.' });
+  if (ctx.from.id !== tx.userId) return ctx.answerCallbackQuery({ text: 'Solo quien registró puede modificar.' });
+
+  tx.metodoPago = null;
+
+  const preview =
+    `*Nuevo gasto*\n\n` +
+    `📋 ${tx.descripcion}\n` +
+    `🏷️ ${tx.categoria}\n` +
+    `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+    `👤 ${tx.tipo}\n\n` +
+    `💳 *¿Con qué pagaste?*`;
+
+  const keyboard = new InlineKeyboard();
+  for (let i = 0; i < AI_PAYMENT_METHODS.length; i++) {
+    keyboard.text(AI_PAYMENT_METHODS[i], `ap:${txId}:${i}`);
+    if (i % 2 === 1) keyboard.row();
+  }
+  if (AI_PAYMENT_METHODS.length % 2 === 1) keyboard.row();
+  keyboard.text('❌ Cancelar', `tx_no:${txId}`);
+
+  await ctx.editMessageText(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
+  await ctx.answerCallbackQuery();
 });
 
 // Toggle compartido en transacciones de foto/audio
@@ -2802,13 +2837,15 @@ bot.callbackQuery(/^photo_shared:(\d+)$/, async (ctx) => {
       if (i % 2 === 1) keyboard.row();
     }
     if (userCards.length % 2 === 1) keyboard.row();
-    keyboard.text(toggleLabel, `photo_shared:${txId}`).row();
+    keyboard.text(toggleLabel, `photo_shared:${txId}`)
+      .text('💰 Otro método', `ap_change:${txId}`).row();
     keyboard.text('❌ Cancelar', `tx_no:${txId}`);
   } else {
     keyboard = new InlineKeyboard()
       .text('✅ Confirmar', `tx_ok:${txId}`)
       .text(toggleLabel, `photo_shared:${txId}`)
       .row()
+      .text('💰 Cambiar método', `ap_change:${txId}`)
       .text('❌ Cancelar', `tx_no:${txId}`);
   }
 
