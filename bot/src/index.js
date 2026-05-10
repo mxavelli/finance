@@ -17,6 +17,7 @@ const { getCategories } = require('./categories');
 const { formatAmount } = require('./parser');
 const { startScheduler } = require('./scheduler');
 const { transcribeAudio, parseExpense, analyzeReceipt, isConfigured: isAiConfigured } = require('./ai');
+const { simulateAffordability, VERDICT_EMOJI: AFFORD_EMOJI, esTarjeta: affordEsTarjeta } = require('./affordability');
 
 const bot = new Bot(config.botToken);
 
@@ -827,6 +828,120 @@ async function cmdProximo(ctx) {
   }
 }
 bot.command('proximo', cmdProximo);
+
+// /puedo — verifica si una compra hipotética encaja con la meta de ahorro mensual
+async function cmdPuedo(ctx) {
+  try {
+    const userId = ctx.from.id;
+    const today = getNowBA();
+    const text = (ctx.match || '').trim();
+
+    if (!text) {
+      return ctx.reply(
+        '🛒 *Verificar compra*\n\n' +
+        'Escribí qué pensás comprar y te digo si encaja con tu meta de ahorro mensual.\n\n' +
+        'Ejemplos:\n' +
+        '• `/puedo zapatillas 90000 visa galicia 6 cuotas`\n' +
+        '• `/puedo licuadora 50000 banco`\n' +
+        '• `/puedo cena 30000 compartido master galicia`\n' +
+        '• `/puedo tv 800000 12 cuotas`',
+        { parse_mode: 'Markdown' },
+      );
+    }
+
+    if (!isAiConfigured()) {
+      return ctx.reply('IA no configurada — falta OPENAI_API_KEY para parsear la compra.');
+    }
+
+    // Reusar el parser de IA existente (las categorías y tarjetas se cargan igual que en registro)
+    const cats = await getCategories();
+    const cardsUsuario = userId === config.moisesId
+      ? config.tarjetas[config.moisesId]
+      : config.tarjetas[config.orianaId];
+    const parsed = await parseExpense(text, cats.map(c => c.name), cardsUsuario);
+
+    if (parsed.error || !parsed.monto) {
+      return ctx.reply(
+        '❓ No pude entender la compra.\n\n' +
+        'Probá algo como: `/puedo zapatillas 90000 visa galicia 6 cuotas`',
+        { parse_mode: 'Markdown' },
+      );
+    }
+
+    const sim = await simulateAffordability(parsed, userId, today, {
+      getFlowData,
+      getMonthlyTransactions,
+      getPresupuestos,
+    });
+
+    await ctx.reply(formatAffordabilityResponse(sim, today), { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('Error en /puedo:', error.message);
+    ctx.reply('Error verificando la compra. Revisá los logs.');
+  }
+}
+bot.command('puedo', cmdPuedo);
+
+// Formatea la respuesta del comando /puedo en Markdown
+function formatAffordabilityResponse(sim, today) {
+  const { parsed, metodoPago, results, worst, savingsTarget, quien, verdictGlobal } = sim;
+  const moneda = parsed.moneda || 'ARS';
+  const totalCuotas = results.length > 0 ? results[0].totalCuotas : 1;
+  const cuotaMensual = results.length > 0 ? results[0].montoCuota : parsed.monto;
+
+  const tipoLower = (parsed.tipo || '').toLowerCase();
+  const compartido = tipoLower === 'compartido';
+
+  let text = `🛒 *Verificar compra — ${quien}*\n`;
+  text += `${parsed.descripcion || 'Compra'} — ${fmtMonto(parsed.monto, moneda)}`;
+  if (totalCuotas > 1) text += ` en ${totalCuotas} cuotas`;
+  if (compartido) text += ` (compartido — tu mitad)`;
+  text += `\n`;
+
+  if (metodoPago) {
+    text += `💳 Método: ${metodoPago}`;
+    if (totalCuotas > 1) text += ` · Cuota mensual: ${fmtMonto(cuotaMensual, moneda)}`;
+    text += `\n`;
+  }
+  text += `🎯 Meta de ahorro: ${fmtMonto(savingsTarget, moneda)}/mes\n\n`;
+
+  // Detalle por mes impactado
+  text += `📅 *Impacto por mes:*\n`;
+  for (const r of results) {
+    const mesLabel = `${MESES_CORTO[r.month - 1]} ${String(r.year).slice(2)}`;
+    const emoji = AFFORD_EMOJI[r.verdict];
+    const cuotaLabel = r.totalCuotas > 1 ? ` (${r.cuotaNumero}/${r.totalCuotas})` : '';
+    text += `• *${mesLabel}*${cuotaLabel}: sobrante ~${fmtMonto(r.proj.sobrante, moneda)}`;
+    text += ` − cuota ${fmtMonto(r.montoCuota, moneda)}`;
+    text += ` − meta ${fmtMonto(savingsTarget, moneda)}`;
+    text += ` = *${fmtMonto(r.libreFinal, moneda)}* ${emoji}\n`;
+  }
+
+  text += `\n`;
+  const emojiGlobal = AFFORD_EMOJI[verdictGlobal];
+
+  if (verdictGlobal === 'SI') {
+    text += `${emojiGlobal} *SÍ podés*\n`;
+    text += `Mejor mes: ${fmtMonto(worst.libreFinal, moneda)} libres después de meta y compra.\n`;
+  } else if (verdictGlobal === 'JUSTO') {
+    const mesPeor = `${MESES_CORTO[worst.month - 1]} ${String(worst.year).slice(2)}`;
+    text += `${emojiGlobal} *JUSTO*\n`;
+    text += `Peor mes (${mesPeor}): ${fmtMonto(worst.libreFinal, moneda)} libres. Margen muy ajustado.\n`;
+  } else {
+    const mesPeor = `${MESES_CORTO[worst.month - 1]} ${String(worst.year).slice(2)}`;
+    text += `${emojiGlobal} *NO conviene*\n`;
+    text += `Peor mes (${mesPeor}): ${fmtMonto(worst.libreFinal, moneda)} (rompe la meta de ahorro).\n`;
+
+    // Sugerencia: probar con más cuotas
+    if (totalCuotas < 12 && metodoPago && affordEsTarjeta(metodoPago)) {
+      const desc = parsed.descripcion || 'compra';
+      text += `\n💡 _Probá: \`/puedo ${desc.toLowerCase()} ${parsed.monto} ${metodoPago.toLowerCase()} 12 cuotas\`_`;
+    }
+  }
+
+  text += `\n_Estimación basada en datos del Sheet + promedios de últimos meses. Variable real puede diferir._`;
+  return text;
+}
 
 // /borrar — muestra ultimas transacciones para elegir cual borrar
 async function cmdBorrar(ctx) {

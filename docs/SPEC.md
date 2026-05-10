@@ -123,6 +123,7 @@ El salario llega en USD a Deel y se distribuye en 3 bolsillos:
 | Pagado por en Gastos Fijos | Columna K "Pagado por" (Moises/Oriana) en hoja Gastos Fijos. Refleja quién paga físicamente cada gasto compartido. `fijos_ok` usa este valor en vez de derivar del userId. Corrige Balance Compartido | 2026-03-01 |
 | Dashboard auto-update | B4 usa `=MONTH(TODAY())`, B5 usa `=YEAR(TODAY())`. Ambos tienen dropdown: meses 1-12, años 2026-2035. Se actualizan solos pero el usuario puede seleccionar otro mes/año | 2026-03-01 |
 | Presupuesto Oriana | Budget agresivo de ahorro cargado en Presupuesto ARS (Individual Oriana) y Presupuesto USD (Individual Oriana). Ingresos: $2.025.000 ARS + $800 USD | 2026-03-01 |
+| Comando /puedo | Verificación de compras vs meta de ahorro. Reusa `parseExpense` de IA + `calcPrimeraCuota` para meses afectados. Proyecta sobrante por mes (snapshot real para mes actual/pasado, baseline blend para futuro). Markup TC: `consumo_prev * 1.5` cuando Pagos TC vacío (cubre cuotas viejas + percepciones). Veredicto: ✅ SÍ (libre ≥ $50K) / ⚠️ JUSTO / ❌ NO. Solo simulación, no escribe en Sheet. Módulo: `bot/src/affordability.js` | 2026-05-09 |
 
 ---
 
@@ -417,6 +418,7 @@ Archivo `.env` en la **raíz del proyecto** (no en `bot/`).
 | `/inversiones` | Portafolio inversiones (PPI): ver total y composición, actualizar valor y porcentajes |
 | `/pago_tarjeta` | Registrar el TOTAL A PAGAR de un resumen de tarjeta de crédito. Uso: `/pago_tarjeta Visa Galicia 1085559.70 [mes]` |
 | `/proximo` | Estimación de pago de tarjetas del mes próximo: gastos fijos, cuotas y consumos variables, desglosado por tarjeta |
+| `/puedo [compra]` | Verifica si una compra hipotética encaja con la meta de ahorro mensual. Considera cuotas → meses afectados. Veredicto: ✅ SÍ / ⚠️ JUSTO / ❌ NO |
 | Texto libre | Parsea como transacción, muestra preview con botones |
 | ✅ Confirmar | Guarda la transacción en Google Sheets |
 | ❌ Cancelar | Descarta la transacción |
@@ -446,6 +448,34 @@ Al iniciar el bot, si las env vars de ingresos están configuradas y el mes actu
 1. Usuario envía `/tarjeta` o `/tarjeta febrero`
 2. Bot carga transacciones del mes y filtra por `isTarjeta(metodoPago)` (incluye tarjetas específicas + legacy "Tarjeta")
 3. Muestra: total, desglose por tarjeta (si hay más de una), desglose por categoría, y listado detallado con nombre de tarjeta
+
+### Flujo de /puedo
+
+Verifica si una compra hipotética encaja con la meta de ahorro mensual del usuario.
+
+1. Usuario envía `/puedo zapatillas 90000 visa galicia 6 cuotas`
+2. Bot strippea el prefijo `/puedo` y manda el resto a `parseExpense()` (mismo parser de IA usado para registrar)
+3. Bot determina meses afectados:
+   - Banco/Efectivo → 1 mes (mes actual), monto completo
+   - Tarjeta crédito + N cuotas → N meses, primera = `calcPrimeraCuota(today, cierreDay)`, cuota mensual = monto/N
+   - Compartido → considera solo la mitad del monto (split 50/50)
+4. Para cada mes impactado, proyecta sobrante post-deudas:
+   - **Mes actual/pasado**: snapshot real (ingreso, banco/efectivo del usuario, factura TC del usuario, transferencia neta a Oriana)
+   - **Mes futuro**: blend de snapshot real con baseline (promedios de últimos 3 meses)
+   - **Factura TC del usuario**: real si Pagos TC está cargado, sino estimado como `consumo_TC_mes_anterior * 1.5` (markup que cubre cuotas viejas + percepciones IVA/RG 5617 30% + consumos no registrados)
+5. Calcula `libreFinal = sobrante - cuotaCompra - metaAhorro`
+6. Veredicto por mes:
+   - `libre ≥ $50K` → ✅ SÍ
+   - `0 ≤ libre < $50K` → ⚠️ JUSTO
+   - `libre < 0` → ❌ NO
+7. Veredicto global = peor mes manda
+8. Si NO conviene y aún quedan opciones, sugiere probar con 12 cuotas
+
+Meta de ahorro se lee de `Presupuesto ARS/USD → Individual {Quien} → Ahorro / Inversión`. Default $0 si no configurada.
+
+Comando solo simulación: NO escribe nada en el Sheet.
+
+Módulo: `bot/src/affordability.js`. Reusa `parseExpense`, `calcPrimeraCuota`, `getFlowData`, `getMonthlyTransactions`, `getPresupuestos`, `cierreTarjetas`.
 
 ### Flujo de /registrar_fijos
 

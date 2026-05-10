@@ -12,3 +12,9 @@ docs/gastos-recurrentes-moises.md
 docs/Visa Activity.md
 docs/Visa Movements.md
 *.csv
+
+# Claude Code worktrees y settings locales
+.claude/
+
+# Resúmenes de tarjeta y otros documentos personales
+docs/reference/*.pdf
