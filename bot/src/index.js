@@ -2559,45 +2559,8 @@ bot.on('message:text', async (ctx) => {
 
       if (matchedCard) {
         tx.metodoPago = matchedCard;
-
-        // Si tiene cuotas → flujo cuotas
-        if (tx.cuotas) {
-          const now = getNowBA();
-          const cierreDay = config.cierreTarjetas[matchedCard] || 0;
-          const primera = calcPrimeraCuota(now, cierreDay);
-          const primeraCuotaStr = formatMesAnio(primera.month, primera.year);
-          const montoCuota = tx.montoCuota || Math.round(tx.monto / tx.cuotas * 100) / 100;
-
-          pendingTx.delete(txId);
-          await appendCuota({
-            descripcion: tx.descripcion, categoria: tx.categoria,
-            montoTotal: tx.monto, cuotas: tx.cuotas, montoCuota,
-            tarjeta: matchedCard, tipo: tx.tipo, pagadoPor: tx.pagadoPor,
-            primeraCuota: primeraCuotaStr, moneda: tx.moneda,
-          });
-          checkBudgetAlert(ctx.from.id, tx);
-          return ctx.reply(
-            `✅ *Cuotas registradas*\n\n` +
-            `📋 ${tx.descripcion}\n` +
-            `💰 ${formatAmount(tx.monto, tx.moneda)} → ${tx.cuotas} cuotas de ${formatAmount(montoCuota, tx.moneda)}\n` +
-            `💳 ${matchedCard}\n` +
-            `📅 Primera cuota: ${primeraCuotaStr}`,
-            { parse_mode: 'Markdown' }
-          );
-        }
-
-        // Sin cuotas → confirmar directo
-        pendingTx.delete(txId);
-        await appendTransaction(tx);
-        checkBudgetAlert(ctx.from.id, tx);
-        return ctx.reply(
-          `✅ *Guardada*\n\n` +
-          `📋 ${tx.descripcion}\n` +
-          `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
-          `🏷️ ${tx.categoria}\n` +
-          `💳 ${matchedCard}`,
-          { parse_mode: 'Markdown' }
-        );
+        pendingTx.set(txId, { ...tx, userId: ctx.from.id, createdAt: Date.now() });
+        return showFinalConfirmation(ctx.reply.bind(ctx), tx, txId);
       }
 
       // Si ya estaba en fase "elegí tarjeta" y no matcheó nombre → recordar
@@ -2642,17 +2605,8 @@ bot.on('message:text', async (ctx) => {
 
       if (matchedMethod) {
         tx.metodoPago = matchedMethod;
-        pendingTx.delete(txId);
-        await appendTransaction(tx);
-        checkBudgetAlert(ctx.from.id, tx);
-        return ctx.reply(
-          `✅ *Guardada*\n\n` +
-          `📋 ${tx.descripcion}\n` +
-          `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
-          `🏷️ ${tx.categoria}\n` +
-          `💳 ${matchedMethod}`,
-          { parse_mode: 'Markdown' }
-        );
+        pendingTx.set(txId, { ...tx, userId: ctx.from.id, createdAt: Date.now() });
+        return showFinalConfirmation(ctx.reply.bind(ctx), tx, txId);
       }
 
       // No se reconoció método → recordar usar botones
@@ -3184,13 +3138,75 @@ bot.callbackQuery(/^tx_ok:(\d+)$/, async (ctx) => {
   pendingTx.delete(txId);
 
   try {
+    // Si es compra en cuotas → guardar en hoja Cuotas
+    if (tx.cuotas && tx.cuotas > 1) {
+      const now = getNowBA();
+      const cierreDay = config.cierreTarjetas[tx.metodoPago] || 0;
+      const primera = calcPrimeraCuota(now, cierreDay);
+      const primeraCuotaStr = formatMesAnio(primera.month, primera.year);
+      const montoCuota = tx.montoCuota || Math.round(tx.monto / tx.cuotas * 100) / 100;
+
+      await appendCuota({
+        descripcion: tx.descripcion,
+        categoria: tx.categoria,
+        montoTotal: tx.monto,
+        cuotasTotales: tx.cuotas,
+        montoCuota,
+        moneda: tx.moneda,
+        tarjeta: tx.metodoPago,
+        tipo: tx.tipo,
+        pagadoPor: tx.pagadoPor,
+        fechaCompra: tx.fecha,
+        primeraCuota: primeraCuotaStr,
+      });
+      checkBudgetAlert(ctx.from.id, tx);
+
+      // Última cuota
+      let ultMes = primera.month + tx.cuotas - 2;
+      let ultAnio = primera.year;
+      while (ultMes > 12) { ultMes -= 12; ultAnio++; }
+      while (ultMes < 1) { ultMes += 12; ultAnio--; }
+      const primeraLabel = `${MESES_CORTO[primera.month - 1]} ${primera.year}`;
+      const ultimaLabel = `${MESES_CORTO[ultMes - 1]} ${ultAnio}`;
+
+      const confirmText =
+        `✅ *Cuotas registradas*\n\n` +
+        `📋 ${tx.descripcion}\n` +
+        `💰 ${tx.cuotas} cuotas de ${formatAmount(montoCuota, tx.moneda)}\n` +
+        `💳 ${tx.metodoPago}\n` +
+        `📅 ${primeraLabel} → ${ultimaLabel}`;
+
+      // Guardar referencia para ajuste de monto post-confirmación
+      const cuotaConfirmId = ++txCounter;
+      const allCuotas = await getCuotas();
+      const lastCuota = allCuotas[allCuotas.length - 1];
+      pendingCuotaEdit.set(cuotaConfirmId, {
+        cuotaRow: lastCuota ? lastCuota.row : null,
+        montoCuota,
+        moneda: tx.moneda,
+        userId: ctx.from.id,
+        createdAt: Date.now(),
+      });
+
+      const keyboard = new InlineKeyboard()
+        .text('✅ OK', `cuota_done:${cuotaConfirmId}`)
+        .text('💰 Ajustar monto cuota', `cuota_adjust:${cuotaConfirmId}`);
+
+      await ctx.editMessageText(confirmText, { parse_mode: 'Markdown', reply_markup: keyboard });
+      await ctx.answerCallbackQuery({ text: 'Cuotas guardadas' });
+      return;
+    }
+
+    // Transacción normal
     await appendTransaction(tx);
     checkBudgetAlert(ctx.from.id, tx);
     await ctx.editMessageText(
       `✅ *Guardada*\n\n` +
       `📋 ${tx.descripcion}\n` +
       `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
-      `🏷️ ${tx.categoria}`,
+      `🏷️ ${tx.categoria}\n` +
+      `💳 ${tx.metodoPago}\n` +
+      `👤 ${tx.tipo}`,
       { parse_mode: 'Markdown' }
     );
     await ctx.answerCallbackQuery({ text: 'Guardada en el Sheet' });
@@ -3203,18 +3219,36 @@ bot.callbackQuery(/^tx_ok:(\d+)$/, async (ctx) => {
 
 // Helper: muestra preview final post-selección de método con toggle Compartido + ✅ Confirmar.
 // Asegura que el usuario pueda cambiar tipo (Individual/Compartido) antes de guardar.
-async function showFinalConfirmation(ctx, tx, txId) {
+// replyFn: ctx.editMessageText.bind(ctx) si vienen de callback; ctx.reply.bind(ctx) si vienen de mensaje de texto.
+async function showFinalConfirmation(replyFn, tx, txId) {
   const toggleLabel = tx.tipo === 'Compartido' ? '👤 Individual' : '🔄 Compartido';
-  const preview =
-    `*Confirmá la transacción*\n\n` +
-    `📅 ${tx.fecha} ${tx.hora}\n` +
-    `📋 ${tx.descripcion}\n` +
-    `🏷️ ${tx.categoria}\n` +
-    `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
-    `💳 ${tx.metodoPago}\n` +
-    `👤 ${tx.tipo}\n` +
-    `🙋 Pagado por: ${tx.pagadoPor}` +
-    (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '');
+  const hasCuotas = tx.cuotas && tx.cuotas > 1;
+
+  let preview;
+  if (hasCuotas) {
+    const montoCuota = tx.montoCuota || Math.round(tx.monto / tx.cuotas * 100) / 100;
+    preview =
+      `*Confirmá la compra en cuotas*\n\n` +
+      `📅 ${tx.fecha}\n` +
+      `📋 ${tx.descripcion}\n` +
+      `🏷️ ${tx.categoria}\n` +
+      `💰 ${formatAmount(tx.monto, tx.moneda)} → ${tx.cuotas} cuotas de ${formatAmount(montoCuota, tx.moneda)}\n` +
+      `💳 ${tx.metodoPago}\n` +
+      `👤 ${tx.tipo}\n` +
+      `🙋 Pagado por: ${tx.pagadoPor}` +
+      (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '');
+  } else {
+    preview =
+      `*Confirmá la transacción*\n\n` +
+      `📅 ${tx.fecha} ${tx.hora}\n` +
+      `📋 ${tx.descripcion}\n` +
+      `🏷️ ${tx.categoria}\n` +
+      `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+      `💳 ${tx.metodoPago}\n` +
+      `👤 ${tx.tipo}\n` +
+      `🙋 Pagado por: ${tx.pagadoPor}` +
+      (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '');
+  }
 
   const keyboard = new InlineKeyboard()
     .text('✅ Confirmar', `tx_ok:${txId}`)
@@ -3223,7 +3257,7 @@ async function showFinalConfirmation(ctx, tx, txId) {
     .text('💰 Cambiar método', `ap_change:${txId}`)
     .text('❌ Cancelar', `tx_no:${txId}`);
 
-  await ctx.editMessageText(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
+  await replyFn(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
 }
 
 // Seleccion de tarjeta especifica → muestra confirmación final (no guarda directo)
@@ -3242,7 +3276,7 @@ bot.callbackQuery(/^card_(\d+)_(\d+)$/, async (ctx) => {
   tx.metodoPago = cardName;
   pendingTx.set(txId, { ...tx, userId: ctx.from.id, createdAt: Date.now() });
 
-  await showFinalConfirmation(ctx, tx, txId);
+  await showFinalConfirmation(ctx.editMessageText.bind(ctx), tx, txId);
   await ctx.answerCallbackQuery({ text: cardName });
 });
 
@@ -3257,11 +3291,11 @@ bot.callbackQuery(/^card_deel_(\d+)$/, async (ctx) => {
   tx.metodoPago = 'Deel Card';
   pendingTx.set(txId, { ...tx, userId: ctx.from.id, createdAt: Date.now() });
 
-  await showFinalConfirmation(ctx, tx, txId);
+  await showFinalConfirmation(ctx.editMessageText.bind(ctx), tx, txId);
   await ctx.answerCallbackQuery({ text: 'Deel Card' });
 });
 
-// Seleccion de tarjeta para compra en cuotas (guarda en hoja Cuotas, no Transacciones)
+// Seleccion de tarjeta para compra en cuotas → muestra confirmación final (no guarda directo)
 bot.callbackQuery(/^cuota_card_(\d+)_(\d+)$/, async (ctx) => {
   const cardIdx = parseInt(ctx.match[1]);
   const txId = parseInt(ctx.match[2]);
@@ -3274,68 +3308,11 @@ bot.callbackQuery(/^cuota_card_(\d+)_(\d+)$/, async (ctx) => {
   const cardName = userCards[cardIdx];
   if (!cardName) return ctx.answerCallbackQuery({ text: 'Tarjeta no encontrada.' });
 
-  pendingTx.delete(txId);
+  tx.metodoPago = cardName;
+  pendingTx.set(txId, { ...tx, userId: ctx.from.id, createdAt: Date.now() });
 
-  try {
-    const now = getNowBA();
-    const cierreDay = config.cierreTarjetas[cardName] || 0;
-    const primera = calcPrimeraCuota(now, cierreDay);
-    const primeraCuotaStr = formatMesAnio(primera.month, primera.year);
-    const montoCuota = tx.montoCuota || Math.round(tx.monto / tx.cuotas * 100) / 100;
-
-    await appendCuota({
-      descripcion: tx.descripcion,
-      categoria: tx.categoria,
-      montoTotal: tx.monto,
-      cuotasTotales: tx.cuotas,
-      montoCuota,
-      moneda: tx.moneda,
-      tarjeta: cardName,
-      tipo: tx.tipo,
-      pagadoPor: tx.pagadoPor,
-      fechaCompra: tx.fecha,
-      primeraCuota: primeraCuotaStr,
-    });
-
-    const primeraMesLabel = MESES_CORTO[primera.month - 1];
-    // Calcular ultima cuota
-    let ultMes = primera.month + tx.cuotas - 2;
-    let ultAnio = primera.year;
-    while (ultMes > 12) { ultMes -= 12; ultAnio++; }
-    while (ultMes < 1) { ultMes += 12; ultAnio--; }
-    const ultimaMesLabel = MESES_CORTO[ultMes - 1];
-
-    const confirmText =
-      `✅ *Cuotas registradas*\n\n` +
-      `📋 ${tx.descripcion}\n` +
-      `💰 ${tx.cuotas} cuotas de ${formatAmount(montoCuota, tx.moneda)}\n` +
-      `💳 ${cardName}\n` +
-      `📅 ${primeraMesLabel} ${primera.year} → ${ultimaMesLabel} ${ultAnio}`;
-
-    // Guardar referencia para posible ajuste de monto
-    const cuotaConfirmId = ++txCounter;
-    const allCuotas = await getCuotas();
-    const lastCuota = allCuotas[allCuotas.length - 1];
-
-    pendingCuotaEdit.set(cuotaConfirmId, {
-      cuotaRow: lastCuota ? lastCuota.row : null,
-      montoCuota,
-      moneda: tx.moneda,
-      userId: ctx.from.id,
-      createdAt: Date.now(),
-    });
-
-    const keyboard = new InlineKeyboard()
-      .text('✅ OK', `cuota_done:${cuotaConfirmId}`)
-      .text('💰 Ajustar monto cuota', `cuota_adjust:${cuotaConfirmId}`);
-
-    await ctx.editMessageText(confirmText, { parse_mode: 'Markdown', reply_markup: keyboard });
-    await ctx.answerCallbackQuery({ text: `Cuotas guardadas — ${cardName}` });
-  } catch (error) {
-    console.error('Error guardando cuotas:', error.message);
-    await ctx.editMessageText('❌ Error guardando las cuotas. Revisá los logs.');
-    await ctx.answerCallbackQuery({ text: 'Error al guardar' });
-  }
+  await showFinalConfirmation(ctx.editMessageText.bind(ctx), tx, txId);
+  await ctx.answerCallbackQuery({ text: cardName });
 });
 
 // Confirmar cuota sin ajuste (remueve botones)
