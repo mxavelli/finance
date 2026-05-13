@@ -1744,15 +1744,16 @@ async function showAiTxPreview(ctx, tx, emoji) {
   const txId = ++txCounter;
   pendingTx.set(txId, { ...tx, userId: ctx.from.id, createdAt: Date.now() });
 
-  // Si falta método de pago → preguntar con botones
+  // Si falta método de pago → preguntar con botones (incluye toggle Compartido)
   if (!tx.metodoPago) {
     const preview =
       `*Nuevo gasto* ${emoji}\n\n` +
       `📋 ${tx.descripcion}\n` +
       `🏷️ ${tx.categoria}\n` +
       `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
-      `👤 ${tx.tipo}\n\n` +
-      `💳 *¿Con qué pagaste?*`;
+      `👤 ${tx.tipo}` +
+      (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '') +
+      `\n\n💳 *¿Con qué pagaste?*`;
 
     const keyboard = new InlineKeyboard();
     for (let i = 0; i < AI_PAYMENT_METHODS.length; i++) {
@@ -1760,6 +1761,8 @@ async function showAiTxPreview(ctx, tx, emoji) {
       if (i % 2 === 1) keyboard.row();
     }
     if (AI_PAYMENT_METHODS.length % 2 === 1) keyboard.row();
+    const toggleLabel = tx.tipo === 'Compartido' ? '👤 Individual' : '🔄 Compartido';
+    keyboard.text(toggleLabel, `photo_shared:${txId}`).row();
     keyboard.text('❌ Cancelar', `tx_no:${txId}`);
 
     return ctx.reply(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
@@ -1789,6 +1792,8 @@ async function showAiTxPreview(ctx, tx, emoji) {
       if (i % 2 === 1) keyboard.row();
     }
     if (userCards.length % 2 === 1) keyboard.row();
+    const toggleLabel = tx.tipo === 'Compartido' ? '👤 Individual' : '🔄 Compartido';
+    keyboard.text(toggleLabel, `photo_shared:${txId}`).row();
     keyboard.text('❌ Cancelar', `tx_no:${txId}`);
 
     return ctx.reply(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
@@ -2960,21 +2965,64 @@ bot.callbackQuery(/^photo_shared:(\d+)$/, async (ctx) => {
     tx.splitOriana = 50;
   }
 
-  const preview =
-    `*Nueva transacción* 📷\n\n` +
-    `📅 ${tx.fecha} ${tx.hora}\n` +
-    `📋 ${tx.descripcion}\n` +
-    `🏷️ ${tx.categoria}\n` +
-    `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
-    `💳 ${tx.metodoPago === 'Tarjeta' ? 'Elegí tarjeta ↓' : tx.metodoPago}\n` +
-    `👤 ${tx.tipo}\n` +
-    `🙋 Pagado por: ${tx.pagadoPor}` +
-    (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '');
-
   const toggleLabel = tx.tipo === 'Compartido' ? '👤 Individual' : '🔄 Compartido';
 
-  let keyboard;
-  if (tx.metodoPago === 'Tarjeta') {
+  let preview, keyboard;
+
+  if (!tx.metodoPago) {
+    // Aún sin método elegido → mostrar misma pregunta con toggle
+    preview =
+      `*Nuevo gasto* 📷\n\n` +
+      `📋 ${tx.descripcion}\n` +
+      `🏷️ ${tx.categoria}\n` +
+      `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+      `👤 ${tx.tipo}` +
+      (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '') +
+      `\n\n💳 *¿Con qué pagaste?*`;
+
+    keyboard = new InlineKeyboard();
+    for (let i = 0; i < AI_PAYMENT_METHODS.length; i++) {
+      keyboard.text(AI_PAYMENT_METHODS[i], `ap:${txId}:${i}`);
+      if (i % 2 === 1) keyboard.row();
+    }
+    if (AI_PAYMENT_METHODS.length % 2 === 1) keyboard.row();
+    keyboard.text(toggleLabel, `photo_shared:${txId}`).row();
+    keyboard.text('❌ Cancelar', `tx_no:${txId}`);
+  } else if (tx.cuotas) {
+    // Compra en cuotas → mostrar tarjetas del usuario con prefijo cuota_card_
+    const montoCuota = tx.montoCuota || Math.round(tx.monto / tx.cuotas * 100) / 100;
+    preview =
+      `*Nueva compra en cuotas* 📷\n\n` +
+      `📅 ${tx.fecha}\n` +
+      `📋 ${tx.descripcion}\n` +
+      `🏷️ ${tx.categoria}\n` +
+      `💰 ${formatAmount(tx.monto, tx.moneda)} → ${tx.cuotas} cuotas de ${formatAmount(montoCuota, tx.moneda)}\n` +
+      `👤 ${tx.tipo}\n` +
+      `🙋 Pagado por: ${tx.pagadoPor}` +
+      (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '') +
+      `\n\n💳 Elegí tarjeta:`;
+
+    const userCards = config.tarjetas[ctx.from.id] || [];
+    keyboard = new InlineKeyboard();
+    for (let i = 0; i < userCards.length; i++) {
+      keyboard.text(`💳 ${userCards[i]}`, `cuota_card_${i}_${txId}`);
+      if (i % 2 === 1) keyboard.row();
+    }
+    if (userCards.length % 2 === 1) keyboard.row();
+    keyboard.text(toggleLabel, `photo_shared:${txId}`).row();
+    keyboard.text('❌ Cancelar', `tx_no:${txId}`);
+  } else if (tx.metodoPago === 'Tarjeta') {
+    preview =
+      `*Nueva transacción* 📷\n\n` +
+      `📅 ${tx.fecha} ${tx.hora}\n` +
+      `📋 ${tx.descripcion}\n` +
+      `🏷️ ${tx.categoria}\n` +
+      `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+      `💳 Elegí tarjeta ↓\n` +
+      `👤 ${tx.tipo}\n` +
+      `🙋 Pagado por: ${tx.pagadoPor}` +
+      (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '');
+
     const userCards = config.tarjetas[ctx.from.id] || [];
     keyboard = new InlineKeyboard();
     for (let i = 0; i < userCards.length; i++) {
@@ -2986,6 +3034,17 @@ bot.callbackQuery(/^photo_shared:(\d+)$/, async (ctx) => {
       .text('💰 Otro método', `ap_change:${txId}`).row();
     keyboard.text('❌ Cancelar', `tx_no:${txId}`);
   } else {
+    preview =
+      `*Nueva transacción* 📷\n\n` +
+      `📅 ${tx.fecha} ${tx.hora}\n` +
+      `📋 ${tx.descripcion}\n` +
+      `🏷️ ${tx.categoria}\n` +
+      `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+      `💳 ${tx.metodoPago}\n` +
+      `👤 ${tx.tipo}\n` +
+      `🙋 Pagado por: ${tx.pagadoPor}` +
+      (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '');
+
     keyboard = new InlineKeyboard()
       .text('✅ Confirmar', `tx_ok:${txId}`)
       .text(toggleLabel, `photo_shared:${txId}`)
