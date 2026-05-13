@@ -289,22 +289,52 @@ bot.use((ctx, next) => {
 // COMANDOS
 // ============================================
 
-// /start
+// /start — ayuda completa con todos los comandos
 async function cmdStart(ctx) {
-  await ctx.reply(
-    '*PlataBot* 🤖\n\n' +
-    'Para registrar un gasto, escribilo directamente:\n' +
-    '• _uber 3500_\n' +
-    '• _super 15000 compartido_\n' +
-    '• _100 usd ahorro_\n\n' +
-    'Para todo lo demás, usá el menú 👇\n\n' +
-    '_Comandos adicionales:_\n' +
-    '/cotizacion — Registrar ingresos del mes\n' +
-    '/ingreso — Registrar ingreso extra\n' +
-    '/gastosfijos — Estado de gastos fijos\n' +
-    '/ping — Verificar conexión',
-    { parse_mode: 'Markdown', reply_markup: mainMenu }
-  );
+  const text =
+    '*PlataBot* 🤖 — Tus finanzas en Telegram\n\n' +
+
+    '*📝 Registrar gastos*\n' +
+    'Escribí el gasto directamente:\n' +
+    '• `uber 3500` → Transporte, Tarjeta\n' +
+    '• `super 15000 compartido` → Alimentación, Compartido\n' +
+    '• `100 usd ahorro` → Ahorro, Deel USD\n' +
+    '• `zapatillas 90000 6 cuotas visa galicia` → con cuotas\n' +
+    '• 🎙 Audio: mandá un mensaje de voz y lo procesa\n' +
+    '• 📸 Foto: sacale una foto al ticket/recibo\n\n' +
+    '/gasto — Wizard paso a paso (categoría, monto, método...)\n' +
+    '/registrar\\_fijos — Gastos fijos y cuotas pendientes del mes\n' +
+    '/cotizacion `[tc]` — Registrar ingresos del mes con cotización\n' +
+    '/ingreso `[monto] [desc]` — Ingreso extra del mes\n\n' +
+
+    '*📊 Consultar estado*\n' +
+    '/balance — Quién le debe a quién este mes\n' +
+    '/resumen `[mes]` — Resumen de gastos del mes\n' +
+    '/flujo `[mes]` — Ingresos vs gastos vs sobrante\n' +
+    '/tarjeta `[mes]` — Total y desglose con tarjeta de crédito\n' +
+    '/gastosfijos — Estado de gastos fijos (✅ / ❌)\n' +
+    '/ultimas `[n]` — Últimas N transacciones (default 5)\n' +
+    '/cuotas — Estado de cuotas activas y completadas\n\n' +
+
+    '*🔮 Proyecciones*\n' +
+    '/proximo — Estimación del próximo resumen TC (fijos + cuotas + variable)\n' +
+    '/puedo `[compra]` — ¿Encaja esta compra con la meta de ahorro?\n' +
+    '  Ej: `/puedo tv 800000 visa galicia 12 cuotas`\n\n' +
+
+    '*💎 Patrimonio*\n' +
+    '/crypto — Portafolio crypto con precio live (compras/ventas)\n' +
+    '/inversiones — Portafolio PPI (valor total + composición)\n\n' +
+
+    '*🛠 Mantenimiento*\n' +
+    '/borrar — Borrar una de las últimas transacciones\n' +
+    '/saldar — Marcar gasto compartido como saldado\n' +
+    '/pago\\_tarjeta `[tarjeta] [monto] [mes]` — Cargar TOTAL A PAGAR de un resumen\n' +
+    '  Ej: `/pago_tarjeta Visa Galicia 2828119.80`\n\n' +
+
+    '*🔌 Otros*\n' +
+    '/ping — Verificar conexión con el Sheet';
+
+  await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: mainMenu });
 }
 bot.command('start', cmdStart);
 
