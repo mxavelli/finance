@@ -318,6 +318,7 @@ async function cmdStart(ctx) {
 
     '*🔮 Proyecciones*\n' +
     '/proximo — Estimación del próximo resumen TC (fijos + cuotas + variable)\n' +
+    '/finalizan — Cuotas que terminan y ahorro proyectado en los próximos 3 meses\n' +
     '/sobrante `[mes]` — Cuánto te queda libre después de gastos + meta de ahorro\n' +
     '  Sin arg → mes siguiente. Ej: `/sobrante julio`\n' +
     '/puedo `[compra]` — ¿Encaja esta compra con la meta de ahorro?\n' +
@@ -754,6 +755,94 @@ async function cmdCuotas(ctx) {
   }
 }
 bot.command('cuotas', cmdCuotas);
+
+// /finalizan — cuotas que terminan próximamente y ahorro proyectado
+async function cmdFinalizan(ctx) {
+  try {
+    const allCuotas = await getCuotas();
+    if (allCuotas.length === 0) {
+      return ctx.reply('No hay cuotas registradas.');
+    }
+
+    const userId = ctx.from.id;
+    const quien = userId === config.moisesId ? 'Moises' : 'Oriana';
+    const userCuotas = filterCuotasForUser(allCuotas, userId);
+    const activas = userCuotas.filter(c => c.cuotasRegistradas < c.cuotasTotales);
+
+    if (activas.length === 0) {
+      return ctx.reply(`🏁 No tenés cuotas activas, ${quien}.`);
+    }
+
+    const today = getNowBA();
+
+    // Para cada cuota: calcular mes/año de la última cuota
+    const cuotasConFin = activas.map(c => {
+      const primera = parseMesAnio(c.primeraCuota);
+      let finMonth = primera.month + (c.cuotasTotales - 1);
+      let finYear = primera.year;
+      while (finMonth > 12) { finMonth -= 12; finYear += 1; }
+      return { ...c, finMonth, finYear };
+    }).sort((a, b) =>
+      monthsDiff({ month: a.finMonth, year: a.finYear }, { month: b.finMonth, year: b.finYear })
+    ).reverse();
+    // Reverse para que estén por orden ascendente
+    cuotasConFin.sort((a, b) =>
+      monthsDiff({ month: today.month, year: today.year }, { month: a.finMonth, year: a.finYear }) -
+      monthsDiff({ month: today.month, year: today.year }, { month: b.finMonth, year: b.finYear })
+    );
+
+    // Compromiso mensual actual (por moneda)
+    let compromisoArs = 0, compromisoUsd = 0;
+    for (const c of activas) {
+      if (c.moneda === 'USD') compromisoUsd += c.montoCuota;
+      else compromisoArs += c.montoCuota;
+    }
+
+    // Cuotas que finalizan en los próximos 3 meses
+    const proximos3 = cuotasConFin.filter(c => {
+      const diff = monthsDiff(today, { month: c.finMonth, year: c.finYear });
+      return diff >= 0 && diff < 3;
+    });
+
+    let text = `🏁 *Cuotas que terminan — ${quien}*\n\n`;
+
+    if (proximos3.length === 0) {
+      text += `_No hay cuotas que finalicen en los próximos 3 meses._\n\n`;
+    } else {
+      text += `📍 *Finalizan en los próximos 3 meses:*\n`;
+      for (const c of proximos3) {
+        const mesLabel = `${MESES_CORTO[c.finMonth - 1]} ${String(c.finYear).slice(2)}`;
+        const cuotasRestantes = c.cuotasTotales - c.cuotasRegistradas;
+        text += `• ${c.descripcion} — quedan ${cuotasRestantes} cuotas, cierra *${mesLabel}*\n`;
+        text += `  Ahorro: ${fmtMonto(c.montoCuota, c.moneda)}/mes desde el mes siguiente\n`;
+      }
+      text += '\n';
+    }
+
+    text += `💰 *Compromiso mensual actual:*\n`;
+    if (compromisoArs > 0) text += `• ${fmtMonto(compromisoArs, 'ARS')}\n`;
+    if (compromisoUsd > 0) text += `• ${fmtMonto(compromisoUsd, 'USD')}\n`;
+
+    // Proyectar compromiso restante después de 3 meses
+    const en3plus = cuotasConFin.filter(c => monthsDiff(today, { month: c.finMonth, year: c.finYear }) >= 3);
+    let restArs = 0, restUsd = 0;
+    for (const c of en3plus) {
+      if (c.moneda === 'USD') restUsd += c.montoCuota;
+      else restArs += c.montoCuota;
+    }
+    text += `\n🚀 *Compromiso en 3 meses:*\n`;
+    if (compromisoArs > 0) text += `• ${fmtMonto(restArs, 'ARS')} _(ahorro: ${fmtMonto(compromisoArs - restArs, 'ARS')}/mes)_\n`;
+    if (compromisoUsd > 0) text += `• ${fmtMonto(restUsd, 'USD')} _(ahorro: ${fmtMonto(compromisoUsd - restUsd, 'USD')}/mes)_\n`;
+
+    text += `\n📋 Lista completa: /cuotas`;
+
+    await ctx.reply(text, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('Error en /finalizan:', error.message);
+    ctx.reply('Error consultando cuotas que finalizan. Revisá los logs.');
+  }
+}
+bot.command('finalizan', cmdFinalizan);
 
 // /proximo — estimación de pago de tarjetas del mes próximo
 async function cmdProximo(ctx) {
