@@ -16,7 +16,7 @@ const {
 const { getCategories } = require('./categories');
 const { formatAmount } = require('./parser');
 const { startScheduler } = require('./scheduler');
-const { transcribeAudio, parseExpense, analyzeReceipt, isConfigured: isAiConfigured } = require('./ai');
+const { transcribeAudio, parseExpense, analyzeReceipt, analyzeStatementPdf, isConfigured: isAiConfigured } = require('./ai');
 const { simulateAffordability, VERDICT_EMOJI: AFFORD_EMOJI, esTarjeta: affordEsTarjeta } = require('./affordability');
 
 const bot = new Bot(config.botToken);
@@ -53,6 +53,7 @@ const pendingSettle = new Map();   // Saldados pendientes de confirmacion
 const pendingCrypto = new Map();   // Operaciones crypto pendientes
 const pendingInversiones = new Map(); // Actualización de inversiones pendiente
 const pendingManual = new Map();     // Wizard carga manual (userId → estado)
+const pendingPdf = new Map();        // Reconciliación de PDF de resumen TC
 let txCounter = 0;
 const TX_TTL = 10 * 60 * 1000; // 10 minutos
 
@@ -301,7 +302,8 @@ async function cmdStart(ctx) {
     '• `100 usd ahorro` → Ahorro, Deel USD\n' +
     '• `zapatillas 90000 6 cuotas visa galicia` → con cuotas\n' +
     '• 🎙 Audio: mandá un mensaje de voz y lo procesa\n' +
-    '• 📸 Foto: sacale una foto al ticket/recibo\n\n' +
+    '• 📸 Foto: sacale una foto al ticket/recibo\n' +
+    '• 📄 PDF resumen TC: subilo y el bot reconcilia + carga Pagos TC\n\n' +
     '/gasto — Wizard paso a paso (categoría, monto, método...)\n' +
     '/registrar\\_fijos — Gastos fijos y cuotas pendientes del mes\n' +
     '/cotizacion `[tc]` — Registrar ingresos del mes con cotización\n' +
@@ -2319,6 +2321,157 @@ bot.on('message:photo', async (ctx) => {
     console.error('Error procesando foto:', error.message);
     ctx.reply('Error procesando la foto. Revisá los logs.');
   }
+});
+
+// ============================================
+// DOCUMENTO PDF — reconciliar resumen TC con transacciones cargadas
+// ============================================
+
+bot.on('message:document', async (ctx) => {
+  const doc = ctx.message.document;
+  if (!doc.mime_type || doc.mime_type !== 'application/pdf') {
+    return ctx.reply('Solo acepto PDFs (resúmenes de tarjeta).');
+  }
+  if (!isAiConfigured()) {
+    return ctx.reply('PDF no disponible. Falta configurar OPENAI_API_KEY.');
+  }
+
+  const statusMsg = await ctx.reply('📄 Analizando resumen...');
+
+  try {
+    // Descargar PDF de Telegram
+    const file = await ctx.api.getFile(doc.file_id);
+    const fileUrl = `https://api.telegram.org/file/bot${config.botToken}/${file.file_path}`;
+    const response = await fetch(fileUrl);
+    const buffer = Buffer.from(await response.arrayBuffer());
+
+    // Parsear con IA
+    const userCards = config.tarjetas[ctx.from.id] || [];
+    const stmt = await analyzeStatementPdf(buffer, userCards);
+
+    if (stmt.error) {
+      return ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `📄 ${stmt.error}`);
+    }
+
+    if (!userCards.includes(stmt.tarjeta)) {
+      return ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id,
+        `📄 Tarjeta detectada: *${stmt.tarjeta}*.\nNo coincide con tus tarjetas: ${userCards.join(', ')}.`,
+        { parse_mode: 'Markdown' });
+    }
+
+    // Parsear fecha de cierre
+    const [, cierreMonthStr, cierreYearStr] = stmt.cierre.split('/');
+    const cierreMonth = parseInt(cierreMonthStr);
+    const cierreYear = parseInt(cierreYearStr);
+
+    // Reconciliar: traer transacciones del mes del cierre + mes anterior (cubre el período)
+    const prevMonth = cierreMonth === 1 ? 12 : cierreMonth - 1;
+    const prevYear = cierreMonth === 1 ? cierreYear - 1 : cierreYear;
+    const [txCierre, txPrev] = await Promise.all([
+      getMonthlyTransactions(cierreMonth, cierreYear),
+      getMonthlyTransactions(prevMonth, prevYear),
+    ]);
+    const allTxs = [...txCierre, ...txPrev].filter(t => t.metodoPago === stmt.tarjeta);
+
+    // Match: monto + fecha ±2 días + moneda. Marcamos los usados para evitar doble-match.
+    const usedTxRows = new Set();
+    const matched = [];
+    const unmatched = [];
+    for (const item of stmt.items) {
+      if (item.esCuota) continue; // las cuotas viejas las maneja la hoja Cuotas
+      const itemDateParts = item.fecha.split('/');
+      const itemDateObj = new Date(parseInt(itemDateParts[2]), parseInt(itemDateParts[1]) - 1, parseInt(itemDateParts[0]));
+
+      const match = allTxs.find(tx => {
+        if (usedTxRows.has(tx.row)) return false;
+        if (tx.moneda !== item.moneda) return false;
+        if (Math.abs(tx.monto - item.monto) > 1) return false;
+        const [d, m, y] = tx.fecha.split('/').map(x => parseInt(x));
+        const txDate = new Date(y, m - 1, d);
+        const diffDays = Math.abs((txDate - itemDateObj) / (1000 * 60 * 60 * 24));
+        return diffDays <= 2;
+      });
+
+      if (match) { matched.push({ item, tx: match }); usedTxRows.add(match.row); }
+      else unmatched.push(item);
+    }
+
+    const cuotasInPdf = stmt.items.filter(i => i.esCuota);
+
+    // Construir reporte
+    let text = `📄 *Resumen ${stmt.tarjeta}*\n\n`;
+    text += `📅 Cierre: ${stmt.cierre} · Vto: ${stmt.vencimiento}\n`;
+    text += `💰 Total: ${fmtMonto(stmt.totalArs, 'ARS')}`;
+    if (stmt.totalUsd > 0) text += ` + ${fmtMonto(stmt.totalUsd, 'USD')}`;
+    text += `\n\n📊 *Reconciliación:*\n`;
+    text += `✅ ${matched.length} ítems cuadran\n`;
+    if (cuotasInPdf.length > 0) text += `ℹ️ ${cuotasInPdf.length} cuotas viejas (ver /cuotas)\n`;
+
+    if (unmatched.length > 0) {
+      const totalUnmatched = unmatched.reduce((s, u) => s + u.monto, 0);
+      text += `\n⚠️ *${unmatched.length} ítems sin registrar:*\n`;
+      for (const u of unmatched.slice(0, 10)) {
+        const desc = (u.descripcion || '').substring(0, 32);
+        text += `• ${u.fecha} ${desc} — ${fmtMonto(u.monto, u.moneda)}\n`;
+      }
+      if (unmatched.length > 10) text += `_…y ${unmatched.length - 10} más_\n`;
+      text += `\n💵 Total sin registrar: ${fmtMonto(totalUnmatched, 'ARS')}\n`;
+    } else {
+      text += `🎉 *Todo cuadra* — no te falta cargar nada.\n`;
+    }
+
+    text += `\n¿Cargar el total en Pagos TC?`;
+
+    // Guardar pending
+    cleanMap(pendingPdf);
+    const pdfId = ++txCounter;
+    pendingPdf.set(pdfId, {
+      userId: ctx.from.id,
+      tarjeta: stmt.tarjeta,
+      totalArs: stmt.totalArs,
+      cierreMonth, cierreYear,
+      createdAt: Date.now(),
+    });
+
+    const keyboard = new InlineKeyboard()
+      .text(`📥 Cargar ${fmtMonto(stmt.totalArs, 'ARS')}`, `pdf_load:${pdfId}`)
+      .text('❌ No cargar', `pdf_no:${pdfId}`);
+
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, text, {
+      parse_mode: 'Markdown',
+      reply_markup: keyboard,
+    });
+  } catch (err) {
+    console.error('Error procesando PDF:', err.message);
+    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, `📄 Error procesando el PDF: ${err.message}`);
+  }
+});
+
+bot.callbackQuery(/^pdf_load:(\d+)$/, async (ctx) => {
+  const pdfId = parseInt(ctx.match[1]);
+  const pending = pendingPdf.get(pdfId);
+  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado' });
+  if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'Solo quien subió puede confirmar' });
+
+  try {
+    await registrarPagoTC(pending.cierreMonth, pending.tarjeta, pending.totalArs);
+    pendingPdf.delete(pdfId);
+    await ctx.editMessageText(
+      `✅ *Cargado en Pagos TC*\n\n${pending.tarjeta} — ${fmtMonto(pending.totalArs, 'ARS')}\nMes: ${MESES_CORTO[pending.cierreMonth - 1]} ${pending.cierreYear}`,
+      { parse_mode: 'Markdown' }
+    );
+    await ctx.answerCallbackQuery({ text: 'Cargado' });
+  } catch (err) {
+    console.error('Error registrando Pago TC desde PDF:', err.message);
+    await ctx.answerCallbackQuery({ text: 'Error al cargar' });
+  }
+});
+
+bot.callbackQuery(/^pdf_no:(\d+)$/, async (ctx) => {
+  const pdfId = parseInt(ctx.match[1]);
+  pendingPdf.delete(pdfId);
+  await ctx.editMessageText('❌ Reconciliación descartada.');
+  await ctx.answerCallbackQuery();
 });
 
 // ============================================

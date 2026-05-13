@@ -154,4 +154,88 @@ function isConfigured() {
   return !!config.openaiApiKey;
 }
 
-module.exports = { transcribeAudio, parseExpense, analyzeReceipt, isConfigured };
+// Analiza un PDF de resumen de tarjeta de crédito argentina.
+// Extrae texto con pdf-parse y lo pasa a GPT-4o-mini para estructurar.
+// Devuelve { tarjeta, cierre, vencimiento, totalArs, totalUsd, items }
+async function analyzeStatementPdf(pdfBuffer, userCardNames) {
+  const client = getClient();
+  if (!client) throw new Error('OpenAI no configurado');
+
+  const pdfParse = require('pdf-parse');
+  const data = await pdfParse(pdfBuffer);
+  const rawText = data.text;
+
+  // Recortar T&C (las páginas finales de los resúmenes son legales y no aportan)
+  // Cortar en marcadores típicos para ahorrar tokens y dejar solo la sección de consumos
+  let text = rawText;
+  const cutMarkers = [
+    'OPCIONES DE FINANCIACION',
+    'INFORMACION DE LA ENTIDAD',
+    'INFORMACION INSTITUCIONAL',
+    'A partir del',
+    'Plan V: abonando',
+  ];
+  for (const marker of cutMarkers) {
+    const idx = text.indexOf(marker);
+    if (idx > 0 && idx < text.length) {
+      text = text.substring(0, idx);
+      break;
+    }
+  }
+  // Tope de seguridad
+  if (text.length > 10000) text = text.substring(0, 10000);
+
+  const cardsList = (userCardNames || []).join(', ');
+
+  const response = await client.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [
+      {
+        role: 'system',
+        content: `Extraés datos de un resumen de tarjeta de crédito argentina (Galicia, BBVA, etc.).
+Devolvé SOLO un JSON válido con esta estructura:
+{
+  "tarjeta": "Visa Galicia" | "Master Galicia" | "Visa BBVA" | "Master BBVA",
+  "cierre": "DD/MM/YYYY",
+  "vencimiento": "DD/MM/YYYY",
+  "totalArs": número (positivo, total a pagar en pesos),
+  "totalUsd": número (positivo, total a pagar en dólares; 0 si no hay),
+  "items": [
+    { "fecha": "DD/MM/YYYY", "descripcion": "string corto", "monto": número positivo, "moneda": "ARS" | "USD", "esCuota": boolean }
+  ]
+}
+
+Reglas críticas:
+- "tarjeta": VISA Eminent/Black/Signature → "Visa Galicia" (si Galicia); MASTERCARD BLACK → "Master Galicia" (si Galicia). Para BBVA: VISA → "Visa BBVA", MASTER → "Master BBVA".
+- "cierre"/"vencimiento": las fechas del CICLO ACTUAL (no anterior). El "VENCIMIENTO ACTUAL" es la fecha cerca del total a pagar. Formato DD/MM/YYYY. Asumí año 2026 si solo aparece "May 26".
+- "totalArs": número grande junto al label "TOTAL A PAGAR" o "SALDO ACTUAL" en pesos.
+- "totalUsd": el segundo número de la línea del total, en dólares. Ejemplo: si ves "VENCIMIENTOSALDO \$SALDO U\$SPAGO MIN.\$PAGO MIN.U\$S 15 May 26 2.828.119,80 177,10 285.160,00 -,--" entonces totalArs=2828119.80 y totalUsd=177.10. SIEMPRE chequeá si hay un total en USD.
+- "items": cada línea de consumo en el "DETALLE DEL CONSUMO". INCLUÍ las CUOTAS de meses anteriores (líneas con fecha vieja tipo "04.08.25" o "11.11.25" y texto "Cuota X/Y" — son cuotas de compras pasadas que se siguen pagando).
+- "esCuota": true si la descripción tiene "Cuota X/Y" (ej "Cuota 10/12", "Cuota 6/6"). False si es consumo nuevo del período.
+- Items en USD: una línea puede tener formato "fecha descripcion monto_ars monto_usd" donde ambos números son iguales. En ese caso es un consumo USD (el monto en pesos es el equivalente). Marcalo como moneda="USD" con el monto USD.
+- Para números argentinos: "2.828.119,80" → 2828119.80. "177,10" → 177.10. "31.666,66" → 31666.66.
+- EXCLUIR: líneas de "SALDO ANTERIOR", "SU PAGO", "BONI MANT", "COM MANT", "PERCEPCION", "PERCEP", "IVA RG", "DB.RG", "IIBB", "SUBTOTAL", "TOTAL A PAGAR".
+- "fecha": del item, formato DD/MM/YYYY. Si el año del PDF es 26, expandir a 2026. Si es 25, expandir a 2025.
+
+Tarjetas posibles del usuario: ${cardsList}.
+
+Si no podés identificar el resumen, devolvé: {"error": "No pude leer el resumen"}`,
+      },
+      {
+        role: 'user',
+        content: `Resumen TC:\n\n${text}`,
+      },
+    ],
+    max_tokens: 12000,
+    response_format: { type: 'json_object' },
+  });
+
+  const output = response.choices[0].message.content.trim();
+  try {
+    return JSON.parse(output);
+  } catch {
+    return { error: 'JSON inválido del resumen' };
+  }
+}
+
+module.exports = { transcribeAudio, parseExpense, analyzeReceipt, analyzeStatementPdf, isConfigured };
