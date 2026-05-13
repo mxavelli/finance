@@ -337,7 +337,9 @@ async function cmdStart(ctx) {
     '  Ej: `/pago_tarjeta Visa Galicia 2828119.80`\n\n' +
 
     '*🔌 Otros*\n' +
-    '/ping — Verificar conexión con el Sheet';
+    '/ping — Verificar conexión con el Sheet\n\n' +
+
+    '_Automatizado:_ a las 19hs todos los días recibís un aviso si tenés un débito automático en 2 días.';
 
   await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: mainMenu });
 }
@@ -4236,6 +4238,7 @@ bot.start({
       getTxId: () => ++txCounter,
       cleanMap,
       filterGastosForUser,
+      filterGastosByFrequency,
       filterCuotasForUser,
       fmtMonto,
       getNowBA,

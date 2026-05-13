@@ -267,6 +267,52 @@ function daysLeftInMonth(year, month, currentDay) {
 }
 
 
+// --- Aviso anticipado de débitos automáticos ---
+// Cada día a las 19:00 BA revisa qué gastos fijos se debitan en 2 días
+// y avisa al usuario correspondiente para que pueda darlos de baja si quiere.
+
+async function checkUpcomingDebits(bot, ctx) {
+  const { month, year, day } = ctx.getNowBA();
+  const targetDay = day + 2;
+
+  // Si target_day excede días del mes, no avisar (los del próximo mes son lejos)
+  const lastDayOfMonth = new Date(year, month, 0).getDate();
+  if (targetDay > lastDayOfMonth) return;
+
+  const allGastos = await getGastosFijos();
+  // Filtrar: día coincide + frecuencia aplica al mes actual
+  const candidatos = ctx.filterGastosByFrequency(
+    allGastos.filter(g => parseInt(g.dia) === targetDay),
+    month
+  );
+
+  if (candidatos.length === 0) return;
+
+  const fmtMonto = ctx.fmtMonto;
+  const fechaLabel = `${targetDay}/${month}`;
+
+  for (const userId of [config.moisesId, config.orianaId]) {
+    const userGastos = ctx.filterGastosForUser(candidatos, userId);
+    if (userGastos.length === 0) continue;
+
+    let text = `🔔 *Próximos débitos automáticos (en 2 días)*\n\n`;
+    text += `🗓️ ${fechaLabel}:\n`;
+    for (const g of userGastos) {
+      const compartido = g.tipo === 'Compartido' ? ' _(compartido)_' : '';
+      text += `• ${g.descripcion} — ${fmtMonto(g.montoEstimado, g.moneda)} → ${g.metodoPago}${compartido}\n`;
+    }
+    text += `\nSi no querés que se cobre, dalo de baja HOY en el proveedor.\n`;
+    text += `Ver lista completa: /gastosfijos`;
+
+    try {
+      await bot.api.sendMessage(userId, text, { parse_mode: 'Markdown' });
+    } catch (err) {
+      console.error(`Error enviando aviso anticipado a ${userId}:`, err.message);
+    }
+  }
+}
+
+
 // --- Entry point ---
 
 function startScheduler(bot, ctx) {
@@ -295,13 +341,20 @@ function startScheduler(bot, ctx) {
     );
   }, { timezone: 'America/Argentina/Buenos_Aires' });
 
+  // Diario 19:00 BA — aviso anticipado de débitos automáticos en 2 días
+  cron.schedule('0 19 * * *', () => {
+    checkUpcomingDebits(bot, ctx).catch(err =>
+      console.error('Error en aviso de débitos próximos:', err.message)
+    );
+  }, { timezone: 'America/Argentina/Buenos_Aires' });
+
   // Primer día de cada mes a medianoche — limpiar alertas de presupuesto
   cron.schedule('0 0 1 * *', () => {
     ctx.budgetAlertsSent.clear();
     console.log('Alertas de presupuesto reseteadas para el nuevo mes.');
   }, { timezone: 'America/Argentina/Buenos_Aires' });
 
-  console.log('Scheduler iniciado: auto-fijos 9:00, ahorro 20:00, resumen semanal lunes 9:00.');
+  console.log('Scheduler iniciado: auto-fijos 9:00, ahorro 20:00, resumen semanal lunes 9:00, aviso débitos 19:00.');
 }
 
 module.exports = { startScheduler };
