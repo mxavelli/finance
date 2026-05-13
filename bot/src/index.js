@@ -3201,7 +3201,32 @@ bot.callbackQuery(/^tx_ok:(\d+)$/, async (ctx) => {
   }
 });
 
-// Seleccion de tarjeta especifica (confirma + setea metodo)
+// Helper: muestra preview final post-selección de método con toggle Compartido + ✅ Confirmar.
+// Asegura que el usuario pueda cambiar tipo (Individual/Compartido) antes de guardar.
+async function showFinalConfirmation(ctx, tx, txId) {
+  const toggleLabel = tx.tipo === 'Compartido' ? '👤 Individual' : '🔄 Compartido';
+  const preview =
+    `*Confirmá la transacción*\n\n` +
+    `📅 ${tx.fecha} ${tx.hora}\n` +
+    `📋 ${tx.descripcion}\n` +
+    `🏷️ ${tx.categoria}\n` +
+    `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
+    `💳 ${tx.metodoPago}\n` +
+    `👤 ${tx.tipo}\n` +
+    `🙋 Pagado por: ${tx.pagadoPor}` +
+    (tx.tipo === 'Compartido' ? `\n📊 Split: Moises ${tx.splitMoises}% / Oriana ${tx.splitOriana}%` : '');
+
+  const keyboard = new InlineKeyboard()
+    .text('✅ Confirmar', `tx_ok:${txId}`)
+    .text(toggleLabel, `photo_shared:${txId}`)
+    .row()
+    .text('💰 Cambiar método', `ap_change:${txId}`)
+    .text('❌ Cancelar', `tx_no:${txId}`);
+
+  await ctx.editMessageText(preview, { parse_mode: 'Markdown', reply_markup: keyboard });
+}
+
+// Seleccion de tarjeta especifica → muestra confirmación final (no guarda directo)
 bot.callbackQuery(/^card_(\d+)_(\d+)$/, async (ctx) => {
   const cardIdx = parseInt(ctx.match[1]);
   const txId = parseInt(ctx.match[2]);
@@ -3215,28 +3240,13 @@ bot.callbackQuery(/^card_(\d+)_(\d+)$/, async (ctx) => {
   if (!cardName) return ctx.answerCallbackQuery({ text: 'Tarjeta no encontrada.' });
 
   tx.metodoPago = cardName;
-  pendingTx.delete(txId);
+  pendingTx.set(txId, { ...tx, userId: ctx.from.id, createdAt: Date.now() });
 
-  try {
-    await appendTransaction(tx);
-    checkBudgetAlert(ctx.from.id, tx);
-    await ctx.editMessageText(
-      `✅ *Guardada*\n\n` +
-      `📋 ${tx.descripcion}\n` +
-      `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
-      `🏷️ ${tx.categoria}\n` +
-      `💳 ${cardName}`,
-      { parse_mode: 'Markdown' }
-    );
-    await ctx.answerCallbackQuery({ text: `Guardada — ${cardName}` });
-  } catch (error) {
-    console.error('Error guardando transacción:', error.message);
-    await ctx.editMessageText('❌ Error guardando en Google Sheets. Revisá los logs.');
-    await ctx.answerCallbackQuery({ text: 'Error al guardar' });
-  }
+  await showFinalConfirmation(ctx, tx, txId);
+  await ctx.answerCallbackQuery({ text: cardName });
 });
 
-// Seleccion de Deel Card desde submenu de tarjetas (foto/audio)
+// Seleccion de Deel Card → muestra confirmación final (no guarda directo)
 bot.callbackQuery(/^card_deel_(\d+)$/, async (ctx) => {
   const txId = parseInt(ctx.match[1]);
   const tx = pendingTx.get(txId);
@@ -3245,24 +3255,10 @@ bot.callbackQuery(/^card_deel_(\d+)$/, async (ctx) => {
   if (ctx.from.id !== tx.userId) return ctx.answerCallbackQuery({ text: 'Solo quien registró puede confirmar.' });
 
   tx.metodoPago = 'Deel Card';
-  pendingTx.delete(txId);
+  pendingTx.set(txId, { ...tx, userId: ctx.from.id, createdAt: Date.now() });
 
-  try {
-    await appendTransaction(tx);
-    await ctx.editMessageText(
-      `✅ *Guardada*\n\n` +
-      `📋 ${tx.descripcion}\n` +
-      `💰 ${formatAmount(tx.monto, tx.moneda)}\n` +
-      `🏷️ ${tx.categoria}\n` +
-      `💳 Deel Card`,
-      { parse_mode: 'Markdown' }
-    );
-    await ctx.answerCallbackQuery({ text: 'Guardada — Deel Card' });
-  } catch (error) {
-    console.error('Error guardando transacción:', error.message);
-    await ctx.editMessageText('❌ Error guardando en Google Sheets. Revisá los logs.');
-    await ctx.answerCallbackQuery({ text: 'Error al guardar' });
-  }
+  await showFinalConfirmation(ctx, tx, txId);
+  await ctx.answerCallbackQuery({ text: 'Deel Card' });
 });
 
 // Seleccion de tarjeta para compra en cuotas (guarda en hoja Cuotas, no Transacciones)
