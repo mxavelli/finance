@@ -1006,7 +1006,9 @@ async function cmdSobrante(ctx) {
 
     const libre = proj.sobrante - savingsTarget;
     const emojiLibre = libre >= 50000 ? '✅' : libre >= 0 ? '⚠️' : '❌';
-    const totalSalidas = proj.bancoEf + proj.pagosTC + proj.transferOriana;
+    const otroNombre = quien === 'Moises' ? 'Oriana' : 'Moises';
+    const totalSalidas = proj.bancoEf + proj.pagosTC + proj.transferOut;
+    const totalEntradas = proj.ingreso + proj.transferIn;
 
     const mesLabel = `${MESES_CORTO[target.month - 1]} ${target.year}`;
     const tagFuente = proj.isFuture ? '_(estimación)_' : proj.isCurrent ? '_(parcial, mes en curso)_' : '_(real)_';
@@ -1016,12 +1018,15 @@ async function cmdSobrante(ctx) {
     else if (proj.pagosTCSource === 'baseline') tcLabel = 'promedio últ. 3 meses';
 
     let text = `💰 *Sobrante ${mesLabel} — ${quien}* ${tagFuente}\n\n`;
-    text += `📈 Ingreso: ${fmtMonto(proj.ingreso, 'ARS')}\n\n`;
+    text += `📈 *Entradas:*\n`;
+    text += `• Ingreso: ${fmtMonto(proj.ingreso, 'ARS')}\n`;
+    if (proj.transferIn > 0) text += `• Transferencia de ${otroNombre} (balance compartido): ${fmtMonto(proj.transferIn, 'ARS')}\n`;
+    text += `*Total entradas:* ${fmtMonto(totalEntradas, 'ARS')}\n\n`;
     text += `📤 *Salidas:*\n`;
     text += `• Banco/Efectivo: ${fmtMonto(proj.bancoEf, 'ARS')}\n`;
     text += `• Pago TC (Visa + Master ${quien === 'Moises' ? 'Galicia' : 'BBVA'}): ${fmtMonto(proj.pagosTC, 'ARS')} _(${tcLabel})_\n`;
-    text += `• Transferencia a ${quien === 'Moises' ? 'Oriana' : 'Moises'}: ${fmtMonto(proj.transferOriana, 'ARS')}\n`;
-    text += `*Total:* ${fmtMonto(totalSalidas, 'ARS')}\n\n`;
+    if (proj.transferOut > 0) text += `• Transferencia a ${otroNombre} (balance compartido): ${fmtMonto(proj.transferOut, 'ARS')}\n`;
+    text += `*Total salidas:* ${fmtMonto(totalSalidas, 'ARS')}\n\n`;
     text += `💵 Sobrante post-deudas: ${fmtMonto(proj.sobrante, 'ARS')}\n`;
     text += `🎯 Meta de ahorro: ${fmtMonto(savingsTarget, 'ARS')}\n`;
     text += `🏦 *Libre tras ahorrar: ${fmtMonto(libre, 'ARS')}* ${emojiLibre}\n\n`;

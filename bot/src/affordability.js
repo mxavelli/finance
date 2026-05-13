@@ -160,19 +160,26 @@ async function getMonthSnapshot(month, year, userId, deps) {
     pagosTC = consumo * TC_BILL_MARKUP;
   }
 
-  // Transferencia neta a Oriana (si Moises pagó menos compartido del que le corresponde, le transfiere)
+  // Balance compartido neto desde la perspectiva del usuario.
+  // transferOut: lo que el usuario tiene que pagar al otro (sale de su cuenta).
+  // transferIn: lo que el otro le debe (entra a su cuenta).
+  // Como mucho uno de los dos es positivo por mes.
   const totalComp = compMoises + compOriana;
   const corresponde = totalComp / 2;
   const balanceMoises = compMoises - corresponde;
-  const transferOriana = userId === config.moisesId
+  const transferOut = userId === config.moisesId
     ? Math.max(0, -balanceMoises)
     : Math.max(0, balanceMoises);
+  const transferIn = userId === config.moisesId
+    ? Math.max(0, balanceMoises)
+    : Math.max(0, -balanceMoises);
 
   return {
     ingreso,
     bancoEf,
     pagosTC,
-    transferOriana,
+    transferOut,
+    transferIn,
     pagosTCSource,
     hasIngreso: ingreso > 0,
     hasBancoEf: bancoEf > 0,
@@ -189,7 +196,7 @@ async function computeBaseline(userId, today, deps) {
     months.push({ month: m, year: y });
   }
 
-  let sumIng = 0, sumBE = 0, sumTC = 0, sumTr = 0;
+  let sumIng = 0, sumBE = 0, sumTC = 0, sumOut = 0, sumIn = 0;
   let cIng = 0, cBE = 0, cTC = 0, cTr = 0;
 
   for (const { month, year } of months) {
@@ -197,14 +204,15 @@ async function computeBaseline(userId, today, deps) {
     if (s.hasIngreso) { sumIng += s.ingreso; cIng++; }
     if (s.hasBancoEf) { sumBE += s.bancoEf; cBE++; }
     if (s.pagosTC > 0) { sumTC += s.pagosTC; cTC++; }
-    if (s.hasComp) { sumTr += s.transferOriana; cTr++; }
+    if (s.hasComp) { sumOut += s.transferOut; sumIn += s.transferIn; cTr++; }
   }
 
   return {
     avgIngreso: cIng > 0 ? sumIng / cIng : 0,
     avgBancoEf: cBE > 0 ? sumBE / cBE : 0,
     avgPagosTC: cTC > 0 ? sumTC / cTC : 0,
-    avgTransferOriana: cTr > 0 ? sumTr / cTr : 0,
+    avgTransferOut: cTr > 0 ? sumOut / cTr : 0,
+    avgTransferIn: cTr > 0 ? sumIn / cTr : 0,
     monthsUsed: { ing: cIng, be: cBE, tc: cTC, tr: cTr },
   };
 }
@@ -215,7 +223,8 @@ function blendForFuture(snap, baseline) {
     ingreso: snap.hasIngreso ? snap.ingreso : baseline.avgIngreso,
     bancoEf: snap.hasBancoEf ? snap.bancoEf : baseline.avgBancoEf,
     pagosTC: snap.pagosTC > 0 ? snap.pagosTC : baseline.avgPagosTC,
-    transferOriana: snap.hasComp ? snap.transferOriana : baseline.avgTransferOriana,
+    transferOut: snap.hasComp ? snap.transferOut : baseline.avgTransferOut,
+    transferIn: snap.hasComp ? snap.transferIn : baseline.avgTransferIn,
     pagosTCSource: snap.pagosTC > 0 ? snap.pagosTCSource : 'baseline',
   };
 }
@@ -224,7 +233,7 @@ function blendForFuture(snap, baseline) {
 async function projectMonthSobrante(month, year, userId, today, deps, baseline) {
   const snap = await getMonthSnapshot(month, year, userId, deps);
   const data = isFuture(month, year, today) ? blendForFuture(snap, baseline) : snap;
-  const sobrante = data.ingreso - data.bancoEf - data.pagosTC - data.transferOriana;
+  const sobrante = data.ingreso + data.transferIn - data.bancoEf - data.pagosTC - data.transferOut;
   return { ...data, sobrante, isCurrent: isCurrent(month, year, today), isFuture: isFuture(month, year, today) };
 }
 
