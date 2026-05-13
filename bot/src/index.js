@@ -314,7 +314,8 @@ async function cmdStart(ctx) {
     '/tarjeta `[mes]` — Total y desglose con tarjeta de crédito\n' +
     '/gastosfijos — Estado de gastos fijos (✅ / ❌)\n' +
     '/ultimas `[n]` — Últimas N transacciones (default 5)\n' +
-    '/cuotas — Estado de cuotas activas y completadas\n\n' +
+    '/cuotas — Estado de cuotas activas y completadas\n' +
+    '/suscripciones — Análisis de tus suscripciones + detección de redundancias\n\n' +
 
     '*🔮 Proyecciones*\n' +
     '/proximo — Estimación del próximo resumen TC (fijos + cuotas + variable)\n' +
@@ -464,6 +465,119 @@ async function cmdGastosFijos(ctx) {
   }
 }
 bot.command('gastosfijos', cmdGastosFijos);
+
+// Grupos heurísticos para detectar suscripciones redundantes
+const SUSC_GROUPS = [
+  { name: 'Apple', keywords: ['apple', 'icloud'] },
+  { name: 'IA / Asistentes', keywords: ['gpt', 'chatgpt', 'claude', 'anthropic', 'openai'] },
+  { name: 'Streaming video', keywords: ['netflix', 'hbo', 'disney', 'paramount', 'star', 'youtube premium'] },
+  { name: 'Streaming música', keywords: ['spotify', 'apple music', 'tidal', 'deezer'] },
+  { name: 'Gaming', keywords: ['xbox', 'playstation', 'steam', 'epic', 'nintendo'] },
+  { name: 'Productividad', keywords: ['microsoft', 'office', 'notion', '1password', 'krisp', 'loom'] },
+  { name: 'Discord', keywords: ['discord'] },
+];
+
+// /suscripciones — analiza peso de cada subscription y detecta posibles redundancias
+async function cmdSuscripciones(ctx) {
+  try {
+    const userId = ctx.from.id;
+    const quien = userId === config.moisesId ? 'Moises' : 'Oriana';
+    const allGastos = await getGastosFijos();
+    const userGastos = filterGastosForUser(allGastos, userId);
+
+    if (userGastos.length === 0) {
+      return ctx.reply(`No tenés gastos fijos cargados, ${quien}.`);
+    }
+
+    // Separar por frecuencia
+    const mensuales = userGastos.filter(g => (g.frecuencia || 'Mensual') === 'Mensual');
+    const trimestrales = userGastos.filter(g => g.frecuencia === 'Trimestral');
+    const anuales = userGastos.filter(g => g.frecuencia === 'Anual');
+
+    // Totales mensuales por moneda (mensuales + prorrateo de trimestral/anual)
+    let totalArs = 0, totalUsd = 0;
+    for (const g of mensuales) {
+      if (g.moneda === 'USD') totalUsd += g.montoEstimado;
+      else totalArs += g.montoEstimado;
+    }
+    for (const g of trimestrales) {
+      if (g.moneda === 'USD') totalUsd += g.montoEstimado / 3;
+      else totalArs += g.montoEstimado / 3;
+    }
+    for (const g of anuales) {
+      if (g.moneda === 'USD') totalUsd += g.montoEstimado / 12;
+      else totalArs += g.montoEstimado / 12;
+    }
+
+    let text = `🔍 *Suscripciones — ${quien}*\n\n`;
+    text += `💰 *Total mensual equivalente:*\n`;
+    if (totalArs > 0) text += `• ${fmtMonto(totalArs, 'ARS')}\n`;
+    if (totalUsd > 0) text += `• ${fmtMonto(totalUsd, 'USD')}\n`;
+    text += `\n`;
+
+    // Top mensuales ARS
+    const mensualesArs = mensuales.filter(g => g.moneda === 'ARS').sort((a, b) => b.montoEstimado - a.montoEstimado);
+    if (mensualesArs.length > 0) {
+      text += `*Top mensuales ARS:*\n`;
+      for (const g of mensualesArs.slice(0, 8)) {
+        const tipo = g.tipo === 'Compartido' ? ' _(compartido)_' : '';
+        text += `• ${g.descripcion} — ${fmtMonto(g.montoEstimado, 'ARS')}${tipo}\n`;
+      }
+      if (mensualesArs.length > 8) text += `_…y ${mensualesArs.length - 8} más_\n`;
+      text += '\n';
+    }
+
+    // Top mensuales USD
+    const mensualesUsd = mensuales.filter(g => g.moneda === 'USD').sort((a, b) => b.montoEstimado - a.montoEstimado);
+    if (mensualesUsd.length > 0) {
+      text += `*Top mensuales USD:*\n`;
+      for (const g of mensualesUsd.slice(0, 8)) {
+        text += `• ${g.descripcion} — ${fmtMonto(g.montoEstimado, 'USD')}\n`;
+      }
+      if (mensualesUsd.length > 8) text += `_…y ${mensualesUsd.length - 8} más_\n`;
+      text += '\n';
+    }
+
+    // No mensuales (trimestrales + anuales)
+    if (trimestrales.length + anuales.length > 0) {
+      text += `*No mensuales:*\n`;
+      for (const g of trimestrales) {
+        text += `• ${g.descripcion} — ${fmtMonto(g.montoEstimado, g.moneda)} cada 3 meses\n`;
+      }
+      for (const g of anuales) {
+        text += `• ${g.descripcion} — ${fmtMonto(g.montoEstimado, g.moneda)} anual\n`;
+      }
+      text += '\n';
+    }
+
+    // Detección de grupos sospechosos
+    const sospechosos = [];
+    for (const grupo of SUSC_GROUPS) {
+      const matches = userGastos.filter(g => {
+        const desc = (g.descripcion || '').toLowerCase();
+        return grupo.keywords.some(k => desc.includes(k));
+      });
+      if (matches.length >= 2) {
+        sospechosos.push({ grupo: grupo.name, items: matches });
+      }
+    }
+
+    if (sospechosos.length > 0) {
+      text += `💡 *Posibles redundancias:*\n`;
+      for (const s of sospechosos) {
+        const nombres = s.items.map(g => g.descripcion).join(', ');
+        text += `• *${s.grupo}*: ${nombres}\n`;
+      }
+      text += `_¿Realmente usás todas? Revisá si podés consolidar._\n`;
+    }
+
+    await ctx.reply(text, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('Error en /suscripciones:', error.message);
+    ctx.reply('Error analizando suscripciones. Revisá los logs.');
+  }
+}
+bot.command('suscripciones', cmdSuscripciones);
 
 // /ultimas [n] — ultimas N transacciones
 async function cmdUltimas(ctx) {
