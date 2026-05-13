@@ -320,6 +320,7 @@ async function cmdStart(ctx) {
     '*🔮 Proyecciones*\n' +
     '/proximo — Estimación del próximo resumen TC (fijos + cuotas + variable)\n' +
     '/finalizan — Cuotas que terminan y ahorro proyectado en los próximos 3 meses\n' +
+    '/meta — Progreso de ahorro vs meta del mes (con proyección fin de mes)\n' +
     '/sobrante `[mes]` — Cuánto te queda libre después de gastos + meta de ahorro\n' +
     '  Sin arg → mes siguiente. Ej: `/sobrante julio`\n' +
     '/puedo `[compra]` — ¿Encaja esta compra con la meta de ahorro?\n' +
@@ -1251,6 +1252,103 @@ async function cmdSobrante(ctx) {
   }
 }
 bot.command('sobrante', cmdSobrante);
+
+// Construye barra de progreso ASCII (10 caracteres)
+function progressBar(pct) {
+  const filled = Math.max(0, Math.min(10, Math.round(pct / 10)));
+  return '█'.repeat(filled) + '░'.repeat(10 - filled);
+}
+
+// /meta — progreso de ahorro vs meta del mes con proyección
+async function cmdMeta(ctx) {
+  try {
+    const userId = ctx.from.id;
+    const quien = userId === config.moisesId ? 'Moises' : 'Oriana';
+    const today = getNowBA();
+    const meta = MESES_CORTO[today.month - 1];
+
+    // Meta de ahorro ARS
+    const presupuestos = await getPresupuestos();
+    const metaKey = `Ahorro / Inversión|Individual ${quien}|ARS`;
+    const goalArs = presupuestos.get(metaKey) || 0;
+
+    if (goalArs === 0) {
+      return ctx.reply(
+        `🎯 No tenés meta de ahorro configurada en el Presupuesto, ${quien}.\n\n` +
+        `Configurala en la hoja "Presupuesto ARS" → tu sección → "Ahorro / Inversión".`
+      );
+    }
+
+    // Ahorro actual del mes
+    const transactions = await getMonthlyTransactions(today.month, today.year);
+    const tipoFilter = `Individual ${quien}`;
+    const ahorradoArs = transactions
+      .filter(t => t.categoria === 'Ahorro / Inversión' && t.tipo === tipoFilter && t.moneda === 'ARS')
+      .reduce((sum, t) => sum + t.monto, 0);
+
+    // Días del mes y restantes
+    const diasMes = new Date(today.year, today.month, 0).getDate();
+    const diasPasados = today.day;
+    const diasRestantes = diasMes - today.day;
+
+    // Métricas
+    const pct = (ahorradoArs / goalArs) * 100;
+    const proyeccion = diasPasados > 0 ? (ahorradoArs / diasPasados) * diasMes : 0;
+    const faltante = goalArs - ahorradoArs;
+    const diarioNecesario = diasRestantes > 0 ? faltante / diasRestantes : faltante;
+
+    let estado, emoji;
+    if (ahorradoArs >= goalArs) { estado = '✅ Meta cumplida'; emoji = '✅'; }
+    else if (proyeccion >= goalArs) { estado = 'En camino ✓'; emoji = '📈'; }
+    else if (pct >= 80) { estado = '⚠️ Justo'; emoji = '⚠️'; }
+    else { estado = '❌ Atrasado'; emoji = '❌'; }
+
+    let text = `🎯 *Meta de ahorro — ${meta} ${today.year} (${quien})*\n\n`;
+    text += `Meta mensual: *${fmtMonto(goalArs, 'ARS')}*\n`;
+    text += `Ahorrado a hoy (${today.day}/${today.month}): *${fmtMonto(ahorradoArs, 'ARS')}*\n`;
+    text += `Progreso: \`${progressBar(pct)}\` ${Math.round(pct)}%\n`;
+    text += `Días restantes: ${diasRestantes}\n\n`;
+
+    text += `📈 *Al ritmo actual:*\n`;
+    text += `• Proyección fin de mes: ${fmtMonto(proyeccion, 'ARS')}\n`;
+    text += `• Estado: ${estado}\n\n`;
+
+    if (faltante > 0 && diasRestantes > 0) {
+      text += `💡 Necesitás *${fmtMonto(diarioNecesario, 'ARS')}*/día para llegar a la meta.\n\n`;
+    } else if (faltante <= 0) {
+      text += `🎉 Ya cumpliste la meta (excedente: ${fmtMonto(-faltante, 'ARS')}).\n\n`;
+    }
+
+    // Histórico últimos 3 meses
+    const historico = [];
+    let hm = today.month, hy = today.year;
+    for (let i = 0; i < 3; i++) {
+      if (hm === 1) { hm = 12; hy--; } else hm--;
+      try {
+        const txs = await getMonthlyTransactions(hm, hy);
+        const tot = txs
+          .filter(t => t.categoria === 'Ahorro / Inversión' && t.tipo === tipoFilter && t.moneda === 'ARS')
+          .reduce((sum, t) => sum + t.monto, 0);
+        historico.push({ m: hm, y: hy, tot });
+      } catch (e) { /* skip */ }
+    }
+
+    if (historico.length > 0) {
+      text += `📊 *Histórico:*\n`;
+      for (const h of historico.reverse()) {
+        const histPct = goalArs > 0 ? Math.round((h.tot / goalArs) * 100) : 0;
+        const histEmoji = h.tot >= goalArs ? '✅' : histPct >= 80 ? '⚠️' : '❌';
+        text += `• ${MESES_CORTO[h.m - 1]} ${String(h.y).slice(2)}: ${histEmoji} ${fmtMonto(h.tot, 'ARS')} _(${histPct}%)_\n`;
+      }
+    }
+
+    await ctx.reply(text, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('Error en /meta:', error.message);
+    ctx.reply('Error consultando meta de ahorro. Revisá los logs.');
+  }
+}
+bot.command('meta', cmdMeta);
 
 // /borrar — muestra ultimas transacciones para elegir cual borrar
 async function cmdBorrar(ctx) {
