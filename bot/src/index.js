@@ -12,6 +12,7 @@ const {
   getCryptoHoldings, getCryptoTransactions, appendCryptoTransaction, addCryptoHolding,
   getInversiones, getInversionesHistorial, updateInversiones, appendInversionesHistorial,
   registrarPagoTC, registrarOtrosIngresos,
+  getAhorroCuentas, updateAhorroCuenta, getLastTC,
 } = require('./sheets');
 const { getCategories } = require('./categories');
 const { formatAmount } = require('./parser');
@@ -52,6 +53,7 @@ const pendingCuotaEdit = new Map(); // Ajuste de monto cuota post-confirmacion (
 const pendingSettle = new Map();   // Saldados pendientes de confirmacion
 const pendingCrypto = new Map();   // Operaciones crypto pendientes
 const pendingInversiones = new Map(); // Actualización de inversiones pendiente
+const pendingAhorro = new Map();      // Actualización de saldo de ahorro pendiente
 const pendingManual = new Map();     // Wizard carga manual (userId → estado)
 const pendingPdf = new Map();        // Reconciliación de PDF de resumen TC
 let txCounter = 0;
@@ -83,8 +85,8 @@ const mainMenu = new Keyboard()
   .text('📝 Últimas').text('🔄 Cuotas').row()
   .text('💵 Flujo').text('🗑 Borrar').row()
   .text('🤝 Saldar').text('💎 Crypto').row()
-  .text('📈 Inversiones').text('🔮 Próximo').row()
-  .text('❓ Ayuda').row()
+  .text('📈 Inversiones').text('🏦 Ahorro').row()
+  .text('🔮 Próximo').text('❓ Ayuda').row()
   .resized().persistent();
 
 // Mapeo botón del menú → nombre de comando
@@ -100,6 +102,7 @@ const MENU_MAP = {
   '🤝 Saldar':     'saldar',
   '💎 Crypto':     'crypto',
   '📈 Inversiones': 'inversiones',
+  '🏦 Ahorro':     'ahorro',
   '🔮 Próximo':    'proximo',
   '❓ Ayuda':      'start',
 };
@@ -329,6 +332,7 @@ async function cmdStart(ctx) {
     '  Ej: `/puedo tv 800000 visa galicia 12 cuotas`\n\n' +
 
     '*💎 Patrimonio*\n' +
+    '/ahorro — Ahorro total: Deel USD + ARS Banco + Crypto + Inversiones\n' +
     '/crypto — Portafolio crypto con precio live (compras/ventas)\n' +
     '/inversiones — Portafolio PPI (valor total + composición)\n\n' +
 
@@ -1753,6 +1757,126 @@ bot.callbackQuery(/^inv_no:(\d+)$/, async (ctx) => {
 });
 
 
+// ============================================
+// /ahorro — Ahorro total: Deel USD + ARS Banco + Crypto + Inversiones
+// ============================================
+
+async function cmdAhorro(ctx) {
+  try {
+    cleanMap(pendingAhorro);
+
+    const [cuentas, tc, holdings, inv] = await Promise.all([
+      getAhorroCuentas(),
+      getLastTC(),
+      getCryptoHoldings(),
+      getInversiones(),
+    ]);
+
+    const { month, year } = getNowBA();
+    const mesStr = MESES_NOMBRE[month - 1].charAt(0).toUpperCase() + MESES_NOMBRE[month - 1].slice(1);
+
+    const cryptoTotalUsd = holdings.reduce((sum, h) => sum + h.valorUsd, 0);
+    const tcEfectivo = tc > 0 ? tc : 1;
+
+    const deelArs = cuentas.deelUsd.saldo * tcEfectivo;
+    const cryptoArs = cryptoTotalUsd * tcEfectivo;
+    const invArs = inv.total;
+    const totalArs = deelArs + cuentas.arsBanco.saldo + cryptoArs + invArs;
+    const totalUsd = cuentas.deelUsd.saldo + (cuentas.arsBanco.saldo / tcEfectivo) + cryptoTotalUsd + (invArs / tcEfectivo);
+
+    let text = `🏦 *Ahorro Total — ${mesStr} ${year}*\n\n`;
+
+    text += `💵 *Cuentas líquidas*\n`;
+    text += `• Deel USD: ${fmtMonto(cuentas.deelUsd.saldo, 'USD')}`;
+    if (tc > 0) text += ` → ~${fmtMonto(deelArs, 'ARS')}`;
+    text += '\n';
+    if (cuentas.deelUsd.fecha && cuentas.deelUsd.fecha !== '-') {
+      text += `  _Act: ${cuentas.deelUsd.fecha}_\n`;
+    }
+    text += `• ARS Banco: ${fmtMonto(cuentas.arsBanco.saldo, 'ARS')}\n`;
+    if (cuentas.arsBanco.fecha && cuentas.arsBanco.fecha !== '-') {
+      text += `  _Act: ${cuentas.arsBanco.fecha}_\n`;
+    }
+
+    text += `\n📊 *Portafolio*\n`;
+    text += `• Crypto: ${fmtMonto(cryptoTotalUsd, 'USD')}`;
+    if (tc > 0 && cryptoTotalUsd > 0) text += ` → ~${fmtMonto(cryptoArs, 'ARS')}`;
+    text += '\n';
+    text += `• Inversiones PPI: ${fmtMonto(invArs, 'ARS')}\n`;
+
+    text += `\n💼 *Total estimado*\n`;
+    text += `~${fmtMonto(totalArs, 'ARS')} / ~${fmtMonto(totalUsd, 'USD')}`;
+    if (tc > 0) text += `\n_(TC: ${fmtMonto(tc, 'ARS')})_`;
+
+    const keyboard = new InlineKeyboard()
+      .text('💵 Actualizar Deel USD', 'sav_deel').row()
+      .text('🏦 Actualizar ARS Banco', 'sav_banco');
+
+    await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: keyboard });
+  } catch (error) {
+    console.error('Error en /ahorro:', error.message);
+    ctx.reply('Error consultando ahorro. Revisá los logs.');
+  }
+}
+bot.command('ahorro', cmdAhorro);
+
+// Callback: solicitar nuevo saldo Deel USD
+bot.callbackQuery('sav_deel', async (ctx) => {
+  pendingAhorro.set(ctx.from.id, { cuenta: 'deelUsd', action: 'update_waiting', createdAt: Date.now() });
+  await ctx.editMessageText(
+    '💵 *Actualizar Deel USD*\n\nEscribí el saldo actual en USD.\nEjemplo: `3500` o `3500,50`',
+    { parse_mode: 'Markdown' }
+  );
+  await ctx.answerCallbackQuery();
+});
+
+// Callback: solicitar nuevo saldo ARS Banco
+bot.callbackQuery('sav_banco', async (ctx) => {
+  pendingAhorro.set(ctx.from.id, { cuenta: 'arsBanco', action: 'update_waiting', createdAt: Date.now() });
+  await ctx.editMessageText(
+    '🏦 *Actualizar ARS Banco*\n\nEscribí el saldo actual en ARS.\nEjemplo: `250000` o `250.000`',
+    { parse_mode: 'Markdown' }
+  );
+  await ctx.answerCallbackQuery();
+});
+
+// Callback: confirmar actualización de ahorro
+bot.callbackQuery(/^sav_ok:(\d+)$/, async (ctx) => {
+  const savId = parseInt(ctx.match[1]);
+  const pending = pendingAhorro.get(savId);
+  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'No autorizado.' });
+
+  pendingAhorro.delete(savId);
+
+  try {
+    const { month, year, day } = getNowBA();
+    const fechaStr = `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
+    await updateAhorroCuenta(pending.cuenta, pending.saldo, fechaStr);
+
+    const nombreCuenta = pending.cuenta === 'deelUsd' ? 'Deel USD' : 'ARS Banco';
+    const moneda = pending.cuenta === 'deelUsd' ? 'USD' : 'ARS';
+    await ctx.editMessageText(
+      `✅ *Ahorro actualizado*\n\n${nombreCuenta}: ${fmtMonto(pending.saldo, moneda)}`,
+      { parse_mode: 'Markdown' }
+    );
+    await ctx.answerCallbackQuery({ text: 'Actualizado' });
+  } catch (error) {
+    console.error('Error actualizando ahorro:', error.message);
+    await ctx.editMessageText('Error actualizando. Revisá los logs.');
+    await ctx.answerCallbackQuery({ text: 'Error' });
+  }
+});
+
+// Callback: cancelar actualización de ahorro
+bot.callbackQuery(/^sav_no:(\d+)$/, async (ctx) => {
+  const savId = parseInt(ctx.match[1]);
+  pendingAhorro.delete(savId);
+  await ctx.editMessageText('Actualización cancelada.');
+  await ctx.answerCallbackQuery({ text: 'Cancelado' });
+});
+
+
 // /gasto — wizard interactivo para carga manual paso a paso
 async function cmdGasto(ctx) {
   try {
@@ -2731,6 +2855,47 @@ bot.on('message:text', async (ctx) => {
         .text('❌ Cancelar', `inv_no:${invId}`);
 
       return ctx.reply(confirmText, { parse_mode: 'Markdown', reply_markup: keyboard });
+    }
+
+    // Interceptar si el usuario está actualizando saldo de ahorro
+    const ahoroPending = pendingAhorro.get(ctx.from.id);
+    if (ahoroPending && ahoroPending.action === 'update_waiting') {
+      const input = text.trim();
+      let saldo;
+      // Soporta "250.000" (miles), "250.000,50" (miles+decimales), "250000"
+      if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(input)) {
+        saldo = parseFloat(input.replace(/\./g, '').replace(',', '.'));
+      } else if (/^\d+,\d+$/.test(input)) {
+        saldo = parseFloat(input.replace(',', '.'));
+      } else {
+        saldo = parseFloat(input);
+      }
+
+      if (isNaN(saldo) || saldo < 0) {
+        return ctx.reply('Monto inválido. Enviá un número positivo.');
+      }
+
+      pendingAhorro.delete(ctx.from.id);
+
+      const savId = ++txCounter;
+      pendingAhorro.set(savId, {
+        cuenta: ahoroPending.cuenta,
+        saldo,
+        userId: ctx.from.id,
+        createdAt: Date.now(),
+      });
+
+      const nombreCuenta = ahoroPending.cuenta === 'deelUsd' ? 'Deel USD' : 'ARS Banco';
+      const moneda = ahoroPending.cuenta === 'deelUsd' ? 'USD' : 'ARS';
+
+      const keyboard = new InlineKeyboard()
+        .text('✅ Confirmar', `sav_ok:${savId}`)
+        .text('❌ Cancelar', `sav_no:${savId}`);
+
+      return ctx.reply(
+        `🏦 *Actualizar Ahorro*\n\n${nombreCuenta}: ${fmtMonto(saldo, moneda)}\n\n¿Confirmar?`,
+        { parse_mode: 'Markdown', reply_markup: keyboard }
+      );
     }
 
     // Interceptar si el usuario está ajustando monto de cuota (con interés)

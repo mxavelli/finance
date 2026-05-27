@@ -124,6 +124,7 @@ El salario llega en USD a Deel y se distribuye en 3 bolsillos:
 | Dashboard auto-update | B4 usa `=MONTH(TODAY())`, B5 usa `=YEAR(TODAY())`. Ambos tienen dropdown: meses 1-12, años 2026-2035. Se actualizan solos pero el usuario puede seleccionar otro mes/año | 2026-03-01 |
 | Presupuesto Oriana | Budget agresivo de ahorro cargado en Presupuesto ARS (Individual Oriana) y Presupuesto USD (Individual Oriana). Ingresos: $2.025.000 ARS + $800 USD | 2026-03-01 |
 | Comando /puedo | Verificación de compras vs meta de ahorro. Reusa `parseExpense` de IA + `calcPrimeraCuota` para meses afectados. Proyecta sobrante por mes (snapshot real para mes actual/pasado, baseline blend para futuro). Markup TC: `consumo_prev * 1.5` cuando Pagos TC vacío (cubre cuotas viejas + percepciones). Veredicto: ✅ SÍ (libre ≥ $50K) / ⚠️ JUSTO / ❌ NO. Solo simulación, no escribe en Sheet. Módulo: `bot/src/affordability.js` | 2026-05-09 |
+| Comando /ahorro + hoja Ahorro | Hoja "Ahorro" (13a) con saldo actual de Deel USD y ARS Banco (actualizados manualmente via bot) + historial de cambios. `/ahorro` muestra Deel USD + ARS Banco + Crypto (suma live de Crypto sheet) + Inversiones PPI (de Inversiones sheet) → total estimado en ARS y USD usando último TC de Ingresos. Botones para actualizar cada cuenta. `setupAhorro()` en sheets.js | 2026-05-26 |
 
 ---
 
@@ -202,6 +203,7 @@ El salario llega en USD a Deel y se distribuye en 3 bolsillos:
 10. **Crypto** — Portafolio de criptomonedas con precio live (GOOGLEFINANCE) e historial de compras/ventas
 11. **Inversiones** — Portafolio de inversiones (PPI): valor total + composición porcentual (Acciones, CEDEARs, FCIs), historial de valor con variación
 12. **Pagos TC** — Pagos reales de resúmenes de tarjeta de crédito, otros ingresos no registrados, saldo inicial
+13. **Ahorro** — Saldo actual de Deel USD y ARS Banco (actualizados via bot), historial de cambios
 
 ### Cuotas
 
@@ -414,6 +416,7 @@ Archivo `.env` en la **raíz del proyecto** (no en `bot/`).
 | `/cotizacion [tc]` | Registra ingresos del mes: calcula USD a cambiar, queda en Deel, extra. Escribe en Ingresos |
 | `/ingreso [monto] [desc]` | Registrar ingreso extra (se suma al mes actual) |
 | `/saldar` | Marcar gastos compartidos como saldados (columna Q en Transacciones) |
+| `/ahorro` | Ver ahorro total (Deel USD + ARS Banco + Crypto + Inversiones). Botones para actualizar saldos líquidos |
 | `/crypto` | Portafolio crypto: ver holdings con precio live, registrar compras/ventas |
 | `/inversiones` | Portafolio inversiones (PPI): ver total y composición, actualizar valor y porcentajes |
 | `/pago_tarjeta` | Registrar el TOTAL A PAGAR de un resumen de tarjeta de crédito. Uso: `/pago_tarjeta Visa Galicia 1085559.70 [mes]` |
@@ -654,6 +657,14 @@ cd bot && node -e "require('./src/sheets').setupPagosTC()"
 ```
 
 `setupPagosTC()` crea la hoja Pagos TC con: saldo inicial, headers mensuales (Ene-Dic), columnas por tarjeta, fórmula Total, columna Otros Ingresos, y estilos. Pre-llena datos de Feb 2026. Ejecutar una sola vez.
+
+### Ahorro
+
+```bash
+cd bot && node -e "require('./src/sheets').setupAhorro()"
+```
+
+`setupAhorro()` crea la hoja Ahorro con saldo de Deel USD y ARS Banco, más historial de actualizaciones. Ejecutar una sola vez (ya ejecutado).
 
 ---
 

@@ -3439,6 +3439,223 @@ async function registrarPagoTC(month, card, amount) {
   });
 }
 
+// ============================================
+// AHORRO TOTAL
+// ============================================
+
+// Crea la hoja "Ahorro" con saldo de Deel USD y ARS Banco, más historial de cambios.
+// Ejecutar una sola vez: node -e "require('./src/sheets').setupAhorro()"
+async function setupAhorro() {
+  const spreadsheetId = config.sheetId;
+
+  // 1. Crear hoja
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{
+        addSheet: {
+          properties: {
+            title: 'Ahorro',
+            tabColorStyle: { rgbColor: { red: 0.20, green: 0.65, blue: 0.40 } },
+          },
+        },
+      }],
+    },
+  });
+
+  // 2. Obtener sheetId
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const ahorroSheetId = meta.data.sheets.find(s => s.properties.title === 'Ahorro').properties.sheetId;
+
+  // 3. Escribir contenido
+  const data = [];
+
+  data.push({ range: 'Ahorro!A1', values: [['Ahorro Total']] });
+  data.push({ range: 'Ahorro!A3:D3', values: [['Cuenta', 'Saldo', 'Moneda', 'Última actualización']] });
+  data.push({
+    range: 'Ahorro!A4:D5',
+    values: [
+      ['Deel USD', 0, 'USD', '-'],
+      ['ARS Banco', 0, 'ARS', '-'],
+    ],
+  });
+  data.push({ range: 'Ahorro!A7', values: [['Historial de cambios']] });
+  data.push({ range: 'Ahorro!A8:E8', values: [['Fecha', 'Cuenta', 'Saldo anterior', 'Saldo nuevo', 'Notas']] });
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: { valueInputOption: 'USER_ENTERED', data },
+  });
+
+  // 4. Estilos dark mode
+  const DARK_BG = { red: 0.12, green: 0.12, blue: 0.12 };
+  const HEADER_BG = { red: 0.20, green: 0.55, blue: 0.35 };
+  const TITLE_BG = { red: 0.12, green: 0.45, blue: 0.28 };
+  const WHITE = { red: 1, green: 1, blue: 1 };
+
+  const requests = [];
+
+  // Fondo dark en toda la hoja
+  requests.push({
+    repeatCell: {
+      range: { sheetId: ahorroSheetId },
+      cell: { userEnteredFormat: { backgroundColor: DARK_BG, textFormat: { foregroundColor: WHITE } } },
+      fields: 'userEnteredFormat(backgroundColor,textFormat)',
+    },
+  });
+
+  // Merge + estilo título A1:D1
+  requests.push({
+    mergeCells: {
+      range: { sheetId: ahorroSheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 5 },
+      mergeType: 'MERGE_ALL',
+    },
+  });
+  requests.push({
+    repeatCell: {
+      range: { sheetId: ahorroSheetId, startRowIndex: 0, endRowIndex: 1 },
+      cell: { userEnteredFormat: {
+        backgroundColor: TITLE_BG,
+        textFormat: { foregroundColor: WHITE, bold: true, fontSize: 14 },
+        horizontalAlignment: 'CENTER',
+      }},
+      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+    },
+  });
+
+  // Header cuentas A3:D3
+  requests.push({
+    repeatCell: {
+      range: { sheetId: ahorroSheetId, startRowIndex: 2, endRowIndex: 3, startColumnIndex: 0, endColumnIndex: 4 },
+      cell: { userEnteredFormat: { backgroundColor: HEADER_BG, textFormat: { foregroundColor: WHITE, bold: true } } },
+      fields: 'userEnteredFormat(backgroundColor,textFormat)',
+    },
+  });
+
+  // Merge + estilo "Historial de cambios" A7
+  requests.push({
+    mergeCells: {
+      range: { sheetId: ahorroSheetId, startRowIndex: 6, endRowIndex: 7, startColumnIndex: 0, endColumnIndex: 5 },
+      mergeType: 'MERGE_ALL',
+    },
+  });
+  requests.push({
+    repeatCell: {
+      range: { sheetId: ahorroSheetId, startRowIndex: 6, endRowIndex: 7 },
+      cell: { userEnteredFormat: {
+        backgroundColor: TITLE_BG,
+        textFormat: { foregroundColor: WHITE, bold: true },
+        horizontalAlignment: 'CENTER',
+      }},
+      fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+    },
+  });
+
+  // Header historial A8:E8
+  requests.push({
+    repeatCell: {
+      range: { sheetId: ahorroSheetId, startRowIndex: 7, endRowIndex: 8, startColumnIndex: 0, endColumnIndex: 5 },
+      cell: { userEnteredFormat: { backgroundColor: HEADER_BG, textFormat: { foregroundColor: WHITE, bold: true } } },
+      fields: 'userEnteredFormat(backgroundColor,textFormat)',
+    },
+  });
+
+  // Anchos de columna
+  const colWidths = [160, 150, 80, 180, 200];
+  for (let i = 0; i < colWidths.length; i++) {
+    requests.push({
+      updateDimensionProperties: {
+        range: { sheetId: ahorroSheetId, dimension: 'COLUMNS', startIndex: i, endIndex: i + 1 },
+        properties: { pixelSize: colWidths[i] },
+        fields: 'pixelSize',
+      },
+    });
+  }
+
+  await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+  console.log('Setup Ahorro completado.');
+}
+
+// Lee los saldos actuales de Deel USD y ARS Banco.
+async function getAhorroCuentas() {
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: config.sheetId,
+    range: 'Ahorro!A4:D5',
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  });
+  const rows = response.data.values || [];
+  const deelRow = rows[0] || [];
+  const bancoRow = rows[1] || [];
+  return {
+    deelUsd: {
+      saldo: parseFloat(deelRow[1]) || 0,
+      fecha: deelRow[3] !== undefined ? String(deelRow[3]) : '-',
+    },
+    arsBanco: {
+      saldo: parseFloat(bancoRow[1]) || 0,
+      fecha: bancoRow[3] !== undefined ? String(bancoRow[3]) : '-',
+    },
+  };
+}
+
+// Actualiza el saldo de una cuenta (deelUsd o arsBanco) y registra en historial.
+async function updateAhorroCuenta(cuenta, nuevoSaldo, fechaStr) {
+  const spreadsheetId = config.sheetId;
+
+  // Leer saldo actual para historial
+  const currentRes = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Ahorro!B4:B5',
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  });
+  const currentRows = currentRes.data.values || [];
+  const isDeelUsd = cuenta === 'deelUsd';
+  const sheetRow = isDeelUsd ? 4 : 5;
+  const saldoAnterior = parseFloat((currentRows[isDeelUsd ? 0 : 1] || [])[0]) || 0;
+  const nombreCuenta = isDeelUsd ? 'Deel USD' : 'ARS Banco';
+  const moneda = isDeelUsd ? 'USD' : 'ARS';
+
+  // Actualizar saldo + fecha
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Ahorro!B${sheetRow}:D${sheetRow}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[nuevoSaldo, moneda, fechaStr]] },
+  });
+
+  // Append al historial
+  const histRes = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Ahorro!A9:A',
+  });
+  const existingHist = histRes.data.values ? histRes.data.values.length : 0;
+  const nextHistRow = existingHist + 9;
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Ahorro!A${nextHistRow}:E${nextHistRow}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[fechaStr, nombreCuenta, saldoAnterior, nuevoSaldo, '']] },
+  });
+}
+
+// Lee el último tipo de cambio (TC) registrado en la hoja Ingresos.
+async function getLastTC() {
+  // Moises TC: fila = mes + 2, columna E (dentro del rango B:F → índice 3)
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: config.sheetId,
+    range: 'Ingresos!E3:E14',
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  });
+  const rows = response.data.values || [];
+  let lastTC = 0;
+  for (const r of rows) {
+    const tc = parseFloat(r[0]) || 0;
+    if (tc > 0) lastTC = tc;
+  }
+  return lastTC;
+}
+
 // Registra otros ingresos (Heller, reintegros, etc.) para un mes dado.
 async function registrarOtrosIngresos(month, amount) {
   const spreadsheetId = config.sheetId;
@@ -3463,5 +3680,6 @@ module.exports = {
   setupInversiones, getInversiones, getInversionesHistorial, updateInversiones, appendInversionesHistorial,
   setupPresupuestoUsdOriana,
   setupPagosTC, migratePagosTC, getPagosTC, registrarPagoTC, registrarOtrosIngresos,
+  setupAhorro, getAhorroCuentas, updateAhorroCuenta, getLastTC,
   parseLocalNumber,
 };
