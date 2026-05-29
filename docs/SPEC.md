@@ -125,6 +125,7 @@ El salario llega en USD a Deel y se distribuye en 3 bolsillos:
 | Presupuesto Oriana | Budget agresivo de ahorro cargado en Presupuesto ARS (Individual Oriana) y Presupuesto USD (Individual Oriana). Ingresos: $2.025.000 ARS + $800 USD | 2026-03-01 |
 | Comando /puedo | Verificación de compras vs meta de ahorro. Reusa `parseExpense` de IA + `calcPrimeraCuota` para meses afectados. Proyecta sobrante por mes (snapshot real para mes actual/pasado, baseline blend para futuro). Markup TC: `consumo_prev * 1.5` cuando Pagos TC vacío (cubre cuotas viejas + percepciones). Veredicto: ✅ SÍ (libre ≥ $50K) / ⚠️ JUSTO / ❌ NO. Solo simulación, no escribe en Sheet. Módulo: `bot/src/affordability.js` | 2026-05-09 |
 | Comando /ahorro + hoja Ahorro | Hoja "Ahorro" (13a) con saldo actual de Deel USD y ARS Banco (actualizados manualmente via bot) + historial de cambios. `/ahorro` muestra Deel USD + ARS Banco + Crypto (suma live de Crypto sheet) + Inversiones PPI (de Inversiones sheet) → total estimado en ARS y USD usando último TC de Ingresos. Botones para actualizar cada cuenta. `setupAhorro()` en sheets.js | 2026-05-26 |
+| Comando /proyeccion | Proyección per-user para mes futuro. Fijos y cuotas son exactos del Sheet (compartidos al 50%); variables = `computeBaseline` (avgBancoEf + avgPagosTC) − fijos − cuotas. USD: quedaDeel − fijos USD − avg gastadoUsd del usuario. Default: próximo mes. Módulo: `bot/src/projection.js` | 2026-05-29 |
 
 ---
 
@@ -421,6 +422,7 @@ Archivo `.env` en la **raíz del proyecto** (no en `bot/`).
 | `/inversiones` | Portafolio inversiones (PPI): ver total y composición, actualizar valor y porcentajes |
 | `/pago_tarjeta` | Registrar el TOTAL A PAGAR de un resumen de tarjeta de crédito. Uso: `/pago_tarjeta Visa Galicia 1085559.70 [mes]` |
 | `/proximo` | Estimación de pago de tarjetas del mes próximo: gastos fijos, cuotas y consumos variables, desglosado por tarjeta |
+| `/proyeccion [mes]` | Proyección per-user para mes futuro: fijos (individuales + 50% compartidos), cuotas activas, variables estimados. ARS + USD. Default: mes siguiente |
 | `/puedo [compra]` | Verifica si una compra hipotética encaja con la meta de ahorro mensual. Considera cuotas → meses afectados. Veredicto: ✅ SÍ / ⚠️ JUSTO / ❌ NO |
 | Texto libre | Parsea como transacción, muestra preview con botones |
 | ✅ Confirmar | Guarda la transacción en Google Sheets |

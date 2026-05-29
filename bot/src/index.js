@@ -326,6 +326,8 @@ async function cmdStart(ctx) {
     '/proximo — Estimación del próximo resumen TC (fijos + cuotas + variable)\n' +
     '/finalizan — Cuotas que terminan y ahorro proyectado en los próximos 3 meses\n' +
     '/meta — Progreso de ahorro vs meta del mes (con proyección fin de mes)\n' +
+    '/proyeccion `[mes]` — Proyección completa: fijos + cuotas + variables estimados (ARS y USD)\n' +
+    '  Sin arg → mes siguiente. Ej: `/proyeccion julio`\n' +
     '/sobrante `[mes]` — Cuánto te queda libre después de gastos + meta de ahorro\n' +
     '  Sin arg → mes siguiente. Ej: `/sobrante julio`\n' +
     '/puedo `[compra]` — ¿Encaja esta compra con la meta de ahorro?\n' +
@@ -1260,6 +1262,109 @@ async function cmdSobrante(ctx) {
   }
 }
 bot.command('sobrante', cmdSobrante);
+
+// /proyeccion [mes] — proyección financiera per-user para un mes futuro
+async function cmdProyeccion(ctx) {
+  try {
+    const userId = ctx.from.id;
+    const today = getNowBA();
+    const arg = (ctx.match || '').trim();
+
+    let target;
+    if (!arg) {
+      target = today.month === 12
+        ? { month: 1, year: today.year + 1 }
+        : { month: today.month + 1, year: today.year };
+    } else {
+      target = parseMonth(arg);
+    }
+
+    const { buildProjection, VERDICT_EMOJI: verdictEmoji } = require('./projection');
+    const [fijosRaw, cuotasRaw] = await Promise.all([getGastosFijos(), getCuotas()]);
+
+    const fijosUser = filterGastosForUser(filterGastosByFrequency(fijosRaw, target.month), userId);
+    const cuotasUser = filterCuotasForUser(getPendingCuotasForMonth(cuotasRaw, target.month, target.year), userId);
+
+    const proj = await buildProjection(
+      target.month, target.year, userId,
+      fijosUser, cuotasUser,
+      { getFlowData, getMonthlyTransactions, getPresupuestos }
+    );
+
+    const mesLabel = `${MESES_NOMBRE[target.month - 1]} ${target.year}`;
+    const emojiVerdict = verdictEmoji[proj.verdictArs];
+
+    let text = `📅 *Proyección ${mesLabel} — ${proj.quien}*\n\n`;
+
+    // Ingresos
+    text += `💰 *INGRESOS*\n`;
+    text += `• ARS: ${fmtMonto(proj.incomeArs, 'ARS')}${proj.incomeSource === 'historial' ? ' _(historial)_' : ''}\n`;
+    if (proj.incomeUsd > 0) {
+      text += `• USD: ${fmtMonto(proj.incomeUsd, 'USD')}`;
+      if (proj.tc > 0) {
+        const arsDeConversion = proj.usdACambiar * proj.tc;
+        text += ` → ${fmtMonto(arsDeConversion, 'ARS')} ARS _(TC ~${fmtMonto(proj.tc, 'ARS')})_`;
+      }
+      text += `\n`;
+      if (proj.quedaDeel > 0) text += `• Queda en Deel: ${fmtMonto(proj.quedaDeel, 'USD')}\n`;
+    }
+    text += '\n';
+
+    // Gastos fijos
+    if (proj.fijoItems.length > 0) {
+      text += `📌 *GASTOS FIJOS* (${proj.fijoItems.length} items)\n`;
+      for (const f of proj.fijoItems) {
+        const tag = f.isCompartido ? ' _(comp. 50%)_' : '';
+        text += `• ${f.descripcion}${tag}: ${fmtMonto(f.montoUsuario, f.moneda)}\n`;
+      }
+      let totalLabel = fmtMonto(proj.fijosArs, 'ARS');
+      if (proj.fijosUsd > 0) totalLabel += ` | ${fmtMonto(proj.fijosUsd, 'USD')}`;
+      text += `*Total fijos:* ${totalLabel}\n\n`;
+    }
+
+    // Cuotas
+    if (proj.cuotaItems.length > 0) {
+      text += `📦 *CUOTAS ACTIVAS* (${proj.cuotaItems.length} cuotas)\n`;
+      for (const c of proj.cuotaItems) {
+        const tag = c.isCompartido ? ' _(comp. 50%)_' : '';
+        text += `• ${c.descripcion} ${c.cuotaNumero}/${c.cuotasTotales} – ${c.tarjeta}${tag}: ${fmtMonto(c.montoUsuario, 'ARS')}\n`;
+      }
+      text += `*Total cuotas:* ${fmtMonto(proj.cuotasArs, 'ARS')}\n\n`;
+    }
+
+    // Variables estimadas
+    const varLabel = proj.fromMonths > 0 ? `prom. ${proj.fromMonths} meses` : 'sin historial';
+    text += `📊 *VARIABLES* _(${varLabel})_\n`;
+    text += `• ARS: ${fmtMonto(proj.variablesArs, 'ARS')}\n`;
+    if (proj.incomeUsd > 0) text += `• USD: ${fmtMonto(proj.variablesUsd, 'USD')}\n`;
+    text += '\n';
+
+    // Resumen ARS
+    text += `──────────────────────\n`;
+    text += `📋 *RESUMEN ARS*\n`;
+    text += `Ingresos:     ${fmtMonto(proj.incomeArs, 'ARS')}\n`;
+    text += `Gastos est.: −${fmtMonto(proj.gastosArs, 'ARS')}\n`;
+    text += `Sobrante:     ${fmtMonto(proj.sobranteArs, 'ARS')}\n`;
+    if (proj.metaAhorro > 0) text += `Meta ahorro: −${fmtMonto(proj.metaAhorro, 'ARS')}\n`;
+    text += `*Libre: ${fmtMonto(proj.libreArs, 'ARS')} ${emojiVerdict}*\n`;
+
+    // Resumen USD
+    if (proj.incomeUsd > 0) {
+      text += `\n💵 *RESUMEN USD*\n`;
+      text += `Queda Deel:  ${fmtMonto(proj.quedaDeel, 'USD')}\n`;
+      text += `Gastos USD: −${fmtMonto(proj.gastosUsd, 'USD')}\n`;
+      text += `*Sobrante: ${fmtMonto(proj.sobranteUsd, 'USD')}*\n`;
+    }
+
+    text += `\n_Fijos y cuotas: datos del Sheet. Variables: promedio histórico._`;
+
+    await ctx.reply(text, { parse_mode: 'Markdown' });
+  } catch (e) {
+    console.error('Error en /proyeccion:', e.message);
+    ctx.reply('Error calculando proyección. Revisá los logs.');
+  }
+}
+bot.command('proyeccion', cmdProyeccion);
 
 // Construye barra de progreso ASCII (10 caracteres)
 function progressBar(pct) {
