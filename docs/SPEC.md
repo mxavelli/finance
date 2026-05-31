@@ -422,7 +422,7 @@ Archivo `.env` en la **raíz del proyecto** (no en `bot/`).
 | `/inversiones` | Portafolio inversiones (PPI): ver total y composición, actualizar valor y porcentajes |
 | `/pago_tarjeta` | Registrar el TOTAL A PAGAR de un resumen de tarjeta de crédito. Uso: `/pago_tarjeta Visa Galicia 1085559.70 [mes]` |
 | `/proximo` | Estimación de pago de tarjetas del mes próximo: gastos fijos, cuotas y consumos variables, desglosado por tarjeta |
-| `/proyeccion [mes]` | Proyección per-user para mes futuro: fijos (individuales + 50% compartidos), cuotas activas, variables estimados. ARS + USD. Default: mes siguiente |
+| `/proyeccion [mes]` | Proyección per-user para mes futuro: fijos (individuales + 50% compartidos), cuotas activas, variables estimados. ARS + USD. Default: mes siguiente. Reemplaza a `/sobrante` (eliminado) |
 | `/puedo [compra]` | Verifica si una compra hipotética encaja con la meta de ahorro mensual. Considera cuotas → meses afectados. Veredicto: ✅ SÍ / ⚠️ JUSTO / ❌ NO |
 | Texto libre | Parsea como transacción, muestra preview con botones |
 | ✅ Confirmar | Guarda la transacción en Google Sheets |

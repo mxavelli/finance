@@ -328,8 +328,6 @@ async function cmdStart(ctx) {
     '/meta — Progreso de ahorro vs meta del mes (con proyección fin de mes)\n' +
     '/proyeccion `[mes]` — Proyección completa: fijos + cuotas + variables estimados (ARS y USD)\n' +
     '  Sin arg → mes siguiente. Ej: `/proyeccion julio`\n' +
-    '/sobrante `[mes]` — Cuánto te queda libre después de gastos + meta de ahorro\n' +
-    '  Sin arg → mes siguiente. Ej: `/sobrante julio`\n' +
     '/puedo `[compra]` — ¿Encaja esta compra con la meta de ahorro?\n' +
     '  Ej: `/puedo tv 800000 visa galicia 12 cuotas`\n\n' +
 
@@ -1188,80 +1186,6 @@ function formatAffordabilityResponse(sim, today) {
   text += `\n_Estimación basada en datos del Sheet + promedios de últimos meses. Variable real puede diferir._`;
   return text;
 }
-
-// /sobrante [mes] — sobrante estimado post-deudas y post-ahorro
-// Default: mes siguiente. Arg opcional: mes específico (ej. "/sobrante junio")
-async function cmdSobrante(ctx) {
-  try {
-    const userId = ctx.from.id;
-    const today = getNowBA();
-    const arg = (ctx.match || '').trim();
-
-    // Default: mes siguiente. Si pasan arg, parsea (acepta nombre o número).
-    let target;
-    if (!arg) {
-      target = today.month === 12
-        ? { month: 1, year: today.year + 1 }
-        : { month: today.month + 1, year: today.year };
-    } else {
-      target = parseMonth(arg);
-    }
-
-    const quien = userId === config.moisesId ? 'Moises' : 'Oriana';
-    const deps = { getFlowData, getMonthlyTransactions, getPresupuestos };
-
-    const { projectMonthSobrante, computeBaseline } = require('./affordability');
-    const baseline = await computeBaseline(userId, today, deps);
-    const proj = await projectMonthSobrante(target.month, target.year, userId, today, deps, baseline);
-
-    const presupuestos = await getPresupuestos();
-    const metaKey = `Ahorro / Inversión|Individual ${quien}|ARS`;
-    const savingsTarget = presupuestos.get(metaKey) || 0;
-
-    const libre = proj.sobrante - savingsTarget;
-    const emojiLibre = libre >= 50000 ? '✅' : libre >= 0 ? '⚠️' : '❌';
-    const otroNombre = quien === 'Moises' ? 'Oriana' : 'Moises';
-    const totalSalidas = proj.bancoEf + proj.pagosTC + proj.transferOut;
-    const totalEntradas = proj.ingreso + proj.transferIn;
-
-    const mesLabel = `${MESES_CORTO[target.month - 1]} ${target.year}`;
-    const tagFuente = proj.isFuture ? '_(estimación)_' : proj.isCurrent ? '_(parcial, mes en curso)_' : '_(real)_';
-
-    let tcLabel = 'real';
-    if (proj.pagosTCSource === 'estimado') tcLabel = 'estimado consumo×1,5';
-    else if (proj.pagosTCSource === 'baseline') tcLabel = 'promedio últ. 3 meses';
-
-    let text = `💰 *Sobrante ${mesLabel} — ${quien}* ${tagFuente}\n\n`;
-    text += `📈 *Entradas:*\n`;
-    text += `• Ingreso: ${fmtMonto(proj.ingreso, 'ARS')}\n`;
-    if (proj.transferIn > 0) text += `• Transferencia de ${otroNombre} (balance compartido): ${fmtMonto(proj.transferIn, 'ARS')}\n`;
-    text += `*Total entradas:* ${fmtMonto(totalEntradas, 'ARS')}\n\n`;
-    text += `📤 *Salidas:*\n`;
-    text += `• Banco/Efectivo: ${fmtMonto(proj.bancoEf, 'ARS')}\n`;
-    text += `• Pago TC (Visa + Master ${quien === 'Moises' ? 'Galicia' : 'BBVA'}): ${fmtMonto(proj.pagosTC, 'ARS')} _(${tcLabel})_\n`;
-    if (proj.transferOut > 0) text += `• Transferencia a ${otroNombre} (balance compartido): ${fmtMonto(proj.transferOut, 'ARS')}\n`;
-    text += `*Total salidas:* ${fmtMonto(totalSalidas, 'ARS')}\n\n`;
-    text += `💵 Sobrante post-deudas: ${fmtMonto(proj.sobrante, 'ARS')}\n`;
-    text += `🎯 Meta de ahorro: ${fmtMonto(savingsTarget, 'ARS')}\n`;
-    text += `🏦 *Libre tras ahorrar: ${fmtMonto(libre, 'ARS')}* ${emojiLibre}\n\n`;
-
-    if (libre < 0) {
-      text += `❌ No llegás a la meta de ahorro — te faltan ${fmtMonto(-libre, 'ARS')}.\n\n`;
-    } else if (libre < 50000) {
-      text += `⚠️ Llegás justo. Cuidá los variables.\n\n`;
-    } else {
-      text += `✅ Llegás a la meta con margen.\n\n`;
-    }
-
-    text += `_Proyección de meses futuros usa promedios. Si Pagos TC está cargado, usa el dato real._`;
-
-    await ctx.reply(text, { parse_mode: 'Markdown' });
-  } catch (e) {
-    console.error('Error en /sobrante:', e.message);
-    ctx.reply('Error calculando sobrante. Revisá los logs.');
-  }
-}
-bot.command('sobrante', cmdSobrante);
 
 // /proyeccion [mes] — proyección financiera per-user para un mes futuro
 async function cmdProyeccion(ctx) {
