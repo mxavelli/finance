@@ -49,45 +49,46 @@ async function buildProjection(targetMonth, targetYear, userId, fijosUser, cuota
   const quien = userId === config.moisesId ? 'Moises' : 'Oriana';
   const today = nowBA();
 
-  // 1. Ingreso ARS: config o fallback a último mes con datos
-  let incomeArs = 0;
-  let incomeSource = 'config';
+  // 1 + 2. Income: promedio de recibidoArs + datos USD de los últimos 3 meses reales.
+  //   Usa getFlowData (igual que /sobrante) en lugar de config.income.moisesSalaryArs,
+  //   porque el ARS real recibido puede ser mucho mayor al target de config
+  //   (Moises convierte la mayor parte del sueldo USD, no solo el mínimo ARS configurado).
   const salaryArs = quien === 'Moises' ? config.income.moisesSalaryArs : config.income.orianaSalaryArs;
-  if (salaryArs) {
-    incomeArs = salaryArs;
-  } else {
-    incomeSource = 'historial';
-    for (let i = 1; i <= 3; i++) {
-      let m = today.month - i, y = today.year;
-      if (m <= 0) { m += 12; y--; }
-      try {
-        const flow = await getFlowData(m, y);
-        const rec = quien === 'Moises' ? flow?.moises?.recibidoArs : flow?.oriana?.recibidoArs;
-        if (rec > 0) { incomeArs = rec; break; }
-      } catch (_) { /* ignorado */ }
-    }
-  }
-
-  // 2. Ingreso USD y TC del último mes con datos
   const salaryUsd = quien === 'Moises' ? config.income.moisesSalaryUsd : config.income.orianaSalaryUsd;
-  const incomeUsd = salaryUsd || 0;
-  let tc = 0;
-  for (let i = 1; i <= 6; i++) {
+
+  let sumArs = 0, countArs = 0;
+  let sumTc = 0, sumTransferido = 0, sumQueda = 0, countFlow = 0;
+
+  for (let i = 1; i <= 3; i++) {
     let m = today.month - i, y = today.year;
     if (m <= 0) { m += 12; y--; }
     try {
       const flow = await getFlowData(m, y);
-      if (flow?.moises?.tc > 0) { tc = flow.moises.tc; break; }
-    } catch (_) { /* ignorado */ }
+      const rec = quien === 'Moises' ? flow?.moises?.recibidoArs : flow?.oriana?.recibidoArs;
+      if (rec > 0) { sumArs += rec; countArs++; }
+      const flowUser = quien === 'Moises' ? flow?.moises : flow?.oriana;
+      if (flowUser?.tc > 0) {
+        sumTc += flowUser.tc;
+        sumTransferido += flowUser.transferido || 0;
+        sumQueda += flowUser.quedaDeel || 0;
+        countFlow++;
+      }
+    } catch (_) { /* mes sin datos */ }
   }
 
-  // USD a convertir = salaryArs / TC redondeado al próximo múltiplo de 50
-  let usdACambiar = 0;
-  let quedaDeel = incomeUsd;
-  if (tc > 0 && salaryArs > 0) {
-    usdACambiar = Math.min(incomeUsd, Math.ceil((salaryArs / tc) / 50) * 50);
-    quedaDeel = Math.max(0, incomeUsd - usdACambiar);
-  }
+  // Ingreso ARS: promedio histórico o fallback a config
+  const incomeArs = countArs > 0 ? sumArs / countArs : (salaryArs || 0);
+  const incomeSource = countArs > 0 ? 'historial' : 'config';
+
+  // Datos USD: promedio histórico o derivado de config + TC
+  const incomeUsd = salaryUsd || 0;
+  const tc = countFlow > 0 ? sumTc / countFlow : 0;
+  const usdACambiar = countFlow > 0
+    ? sumTransferido / countFlow
+    : (tc > 0 && salaryArs ? Math.min(incomeUsd, Math.ceil((salaryArs / tc) / 50) * 50) : 0);
+  const quedaDeel = countFlow > 0
+    ? sumQueda / countFlow
+    : Math.max(0, incomeUsd - usdACambiar);
 
   // 3. Fijos: separar por moneda, compartido al 50%
   let fijosArs = 0, fijosUsd = 0;
