@@ -123,9 +123,9 @@ El salario llega en USD a Deel y se distribuye en 3 bolsillos:
 | Pagado por en Gastos Fijos | Columna K "Pagado por" (Moises/Oriana) en hoja Gastos Fijos. Refleja quién paga físicamente cada gasto compartido. `fijos_ok` usa este valor en vez de derivar del userId. Corrige Balance Compartido | 2026-03-01 |
 | Dashboard auto-update | B4 usa `=MONTH(TODAY())`, B5 usa `=YEAR(TODAY())`. Ambos tienen dropdown: meses 1-12, años 2026-2035. Se actualizan solos pero el usuario puede seleccionar otro mes/año | 2026-03-01 |
 | Presupuesto Oriana | Budget agresivo de ahorro cargado en Presupuesto ARS (Individual Oriana) y Presupuesto USD (Individual Oriana). Ingresos: $2.025.000 ARS + $800 USD | 2026-03-01 |
-| Comando /puedo | Verificación de compras vs meta de ahorro. Reusa `parseExpense` de IA + `calcPrimeraCuota` para meses afectados. Proyecta sobrante por mes (snapshot real para mes actual/pasado, baseline blend para futuro). Markup TC: `consumo_prev * 1.5` cuando Pagos TC vacío (cubre cuotas viejas + percepciones). Veredicto: ✅ SÍ (libre ≥ $50K) / ⚠️ JUSTO / ❌ NO. Solo simulación, no escribe en Sheet. Módulo: `bot/src/affordability.js` | 2026-05-09 |
+| Comando /puedo | Verificación de compras vs meta de ahorro. Reusa `parseExpense` de IA + `calcPrimeraCuota` para meses afectados. Para cada mes impactado llama a `buildProjection()` (mismo motor que /proyeccion, en `projection.js`) y resta cuota de la compra + meta de ahorro al sobrante proyectado. Veredicto: ✅ SÍ (libre ≥ $50K ARS / $50 USD) / ⚠️ JUSTO / ❌ NO. Solo simulación, no escribe en Sheet. Módulo: `bot/src/affordability.js` | 2026-06-18 |
 | Comando /ahorro + hoja Ahorro | Hoja "Ahorro" (13a) con saldo actual de Deel USD y ARS Banco (actualizados manualmente via bot) + historial de cambios. `/ahorro` muestra Deel USD + ARS Banco + Crypto (suma live de Crypto sheet) + Inversiones PPI (de Inversiones sheet) → total estimado en ARS y USD usando último TC de Ingresos. Botones para actualizar cada cuenta. `setupAhorro()` en sheets.js | 2026-05-26 |
-| Comando /proyeccion | Proyección per-user para mes futuro. Fijos y cuotas son exactos del Sheet (compartidos al 50%); variables = `computeBaseline` (avgBancoEf + avgPagosTC) − fijos − cuotas. USD: quedaDeel − fijos USD − avg gastadoUsd del usuario. Default: próximo mes. Módulo: `bot/src/projection.js` | 2026-05-29 |
+| Comando /proyeccion | Proyección per-user para mes futuro. Fijos y cuotas son exactos del Sheet (compartidos al 50%); variables = promedio de transacciones reales del usuario (últimos 3 meses, ARS/USD) − fijos − cuotas (`avgTransactionSpend`, evita el estimado TC×1.5 que inflaba gastos). USD: quedaDeel − fijos USD − variables USD. Default: próximo mes. Módulo: `bot/src/projection.js` | 2026-05-29 |
 
 ---
 
@@ -464,14 +464,11 @@ Verifica si una compra hipotética encaja con la meta de ahorro mensual del usua
    - Banco/Efectivo → 1 mes (mes actual), monto completo
    - Tarjeta crédito + N cuotas → N meses, primera = `calcPrimeraCuota(today, cierreDay)`, cuota mensual = monto/N
    - Compartido → considera solo la mitad del monto (split 50/50)
-4. Para cada mes impactado, proyecta sobrante post-deudas:
-   - **Mes actual/pasado**: snapshot real (ingreso, banco/efectivo del usuario, factura TC del usuario, transferencia neta a Oriana)
-   - **Mes futuro**: blend de snapshot real con baseline (promedios de últimos 3 meses)
-   - **Factura TC del usuario**: real si Pagos TC está cargado, sino estimado como `consumo_TC_mes_anterior * 1.5` (markup que cubre cuotas viejas + percepciones IVA/RG 5617 30% + consumos no registrados)
+4. Para cada mes impactado, llama a `buildProjection()` (mismo motor que `/proyeccion`) para obtener el sobrante proyectado de ese mes: fijos + cuotas exactos del Sheet, variables = promedio de transacciones reales del usuario (últimos 3 meses) − fijos − cuotas
 5. Calcula `libreFinal = sobrante - cuotaCompra - metaAhorro`
 6. Veredicto por mes:
-   - `libre ≥ $50K` → ✅ SÍ
-   - `0 ≤ libre < $50K` → ⚠️ JUSTO
+   - `libre ≥ $50K ARS / $50 USD` → ✅ SÍ
+   - `0 ≤ libre < margen` → ⚠️ JUSTO
    - `libre < 0` → ❌ NO
 7. Veredicto global = peor mes manda
 8. Si NO conviene y aún quedan opciones, sugiere probar con 12 cuotas
@@ -480,7 +477,7 @@ Meta de ahorro se lee de `Presupuesto ARS/USD → Individual {Quien} → Ahorro 
 
 Comando solo simulación: NO escribe nada en el Sheet.
 
-Módulo: `bot/src/affordability.js`. Reusa `parseExpense`, `calcPrimeraCuota`, `getFlowData`, `getMonthlyTransactions`, `getPresupuestos`, `cierreTarjetas`.
+Módulo: `bot/src/affordability.js`. Reusa `parseExpense`, `calcPrimeraCuota`, `buildProjection` (de `projection.js`), `getFlowData`, `getMonthlyTransactions`, `getPresupuestos`, `getGastosFijos`, `getCuotas`, `cierreTarjetas`.
 
 ### Flujo de /registrar_fijos
 

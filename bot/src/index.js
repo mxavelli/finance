@@ -1116,6 +1116,12 @@ async function cmdPuedo(ctx) {
       getFlowData,
       getMonthlyTransactions,
       getPresupuestos,
+      getGastosFijos,
+      getCuotas,
+      filterGastosForUser,
+      filterGastosByFrequency,
+      filterCuotasForUser,
+      getPendingCuotasForMonth,
     });
 
     await ctx.reply(formatAffordabilityResponse(sim, today), { parse_mode: 'Markdown' });
@@ -1155,7 +1161,7 @@ function formatAffordabilityResponse(sim, today) {
     const mesLabel = `${MESES_CORTO[r.month - 1]} ${String(r.year).slice(2)}`;
     const emoji = AFFORD_EMOJI[r.verdict];
     const cuotaLabel = r.totalCuotas > 1 ? ` (${r.cuotaNumero}/${r.totalCuotas})` : '';
-    text += `• *${mesLabel}*${cuotaLabel}: sobrante ~${fmtMonto(r.proj.sobrante, moneda)}`;
+    text += `• *${mesLabel}*${cuotaLabel}: sobrante ~${fmtMonto(r.sobrante, moneda)}`;
     text += ` − cuota ${fmtMonto(r.montoCuota, moneda)}`;
     text += ` − meta ${fmtMonto(savingsTarget, moneda)}`;
     text += ` = *${fmtMonto(r.libreFinal, moneda)}* ${emoji}\n`;
