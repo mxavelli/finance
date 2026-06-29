@@ -7,6 +7,7 @@ const config = require('./config');
 const {
   getGastosFijos, getCuotas, getMonthlyTransactions,
   getPresupuestos, getBalance,
+  setDashboardPeriod, getDashboardPeriod,
 } = require('./sheets');
 
 // --- Auto-fijos diario ---
@@ -315,10 +316,26 @@ async function checkUpcomingDebits(bot, ctx) {
 
 // --- Entry point ---
 
+// Recupera un rollover de mes perdido (bot caído el día 1): si el período mostrado
+// en el Dashboard quedó en un mes anterior al actual, lo actualiza. No pisa la
+// navegación manual del mes en curso ni de meses futuros.
+async function syncDashboardPeriod(ctx) {
+  const { month, year } = ctx.getNowBA();
+  const shown = await getDashboardPeriod();
+  if (!shown.month || !shown.year) return;
+  const isStale = shown.year < year || (shown.year === year && shown.month < month);
+  if (!isStale) return;
+  await setDashboardPeriod(month, year);
+  console.log(`Dashboard sincronizado a ${month}/${year} (estaba en ${shown.month}/${shown.year}).`);
+}
+
 function startScheduler(bot, ctx) {
   // Startup checks (migrados desde index.js)
   setTimeout(() => ctx.checkIncomeReminder(), 3000);
   setTimeout(() => ctx.checkFixedExpensesReminder(), 5000);
+  setTimeout(() => syncDashboardPeriod(ctx).catch(err =>
+    console.error('Error sincronizando período del Dashboard:', err.message)
+  ), 7000);
 
   // Diario 9:00 AM Buenos Aires — auto registro gastos fijos por día
   cron.schedule('0 9 * * *', () => {
@@ -348,10 +365,14 @@ function startScheduler(bot, ctx) {
     );
   }, { timezone: 'America/Argentina/Buenos_Aires' });
 
-  // Primer día de cada mes a medianoche — limpiar alertas de presupuesto
+  // Primer día de cada mes a medianoche — limpiar alertas y resetear período del Dashboard
   cron.schedule('0 0 1 * *', () => {
     ctx.budgetAlertsSent.clear();
     console.log('Alertas de presupuesto reseteadas para el nuevo mes.');
+    const { month, year } = ctx.getNowBA();
+    setDashboardPeriod(month, year)
+      .then(() => console.log(`Dashboard reseteado a ${month}/${year}.`))
+      .catch(err => console.error('Error reseteando período del Dashboard:', err.message));
   }, { timezone: 'America/Argentina/Buenos_Aires' });
 
   console.log('Scheduler iniciado: auto-fijos 9:00, ahorro 20:00, resumen semanal lunes 9:00, aviso débitos 19:00.');

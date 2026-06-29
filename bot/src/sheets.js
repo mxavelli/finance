@@ -3668,6 +3668,30 @@ async function registrarOtrosIngresos(month, amount) {
   });
 }
 
+// Escribe el período (mes/año) en los selectores B4/B5 del Dashboard.
+// Mantiene el dropdown funcional: son valores estáticos, no fórmulas.
+async function setDashboardPeriod(month, year) {
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: config.sheetId,
+    range: 'Dashboard!B4:B5',
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[month], [year]] },
+  });
+}
+
+// Lee el período actual de los selectores B4/B5 del Dashboard.
+async function getDashboardPeriod() {
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: config.sheetId,
+    range: 'Dashboard!B4:B5',
+  });
+  const vals = res.data.values || [];
+  return {
+    month: parseInt(vals[0]?.[0], 10) || null,
+    year: parseInt(vals[1]?.[0], 10) || null,
+  };
+}
+
 module.exports = {
   sheets, testConnection, appendTransaction, appendTransactionsBatch, setupPhase4, setupDashboard, setupDashboardCards, setupEstilos,
   getBalance, getMonthlyTransactions, getGastosFijos, updateGastoFijoMonto, getLastTransactions,
@@ -3681,5 +3705,6 @@ module.exports = {
   setupPresupuestoUsdOriana,
   setupPagosTC, migratePagosTC, getPagosTC, registrarPagoTC, registrarOtrosIngresos,
   setupAhorro, getAhorroCuentas, updateAhorroCuenta, getLastTC,
+  setDashboardPeriod, getDashboardPeriod,
   parseLocalNumber,
 };
