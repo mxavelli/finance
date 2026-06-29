@@ -209,6 +209,23 @@ function fmtMonto(monto, moneda) {
   return formatAmount(monto, moneda || 'ARS');
 }
 
+// Envía un texto largo partiéndolo en varios mensajes (límite Telegram: 4096 chars).
+// Corta en saltos de línea para no romper entidades Markdown a la mitad.
+async function replyChunked(ctx, text, options) {
+  const LIMIT = 3900;
+  if (text.length <= LIMIT) return ctx.reply(text, options);
+
+  let chunk = '';
+  for (const line of text.split('\n')) {
+    if (chunk.length + line.length + 1 > LIMIT) {
+      await ctx.reply(chunk, options);
+      chunk = '';
+    }
+    chunk += (chunk ? '\n' : '') + line;
+  }
+  if (chunk) await ctx.reply(chunk, options);
+}
+
 // Categorías donde exceder el presupuesto es positivo (ahorro/inversión).
 // Para estas se invierte la lógica: alerta cuando estás BAJO la meta.
 const CATEGORIAS_POSITIVAS = ['Ahorro / Inversión'];
@@ -661,7 +678,7 @@ async function cmdTarjeta(ctx) {
       text += `• ${fechaCorta} — ${tx.descripcion} — ${fmtMonto(tx.monto, tx.moneda)}${cardLabel}\n`;
     }
 
-    await ctx.reply(text, { parse_mode: 'Markdown' });
+    await replyChunked(ctx, text, { parse_mode: 'Markdown' });
   } catch (error) {
     console.error('Error en /tarjeta:', error.message);
     ctx.reply('Error consultando gastos de tarjeta. Revisá los logs.');
