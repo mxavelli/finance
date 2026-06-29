@@ -81,12 +81,10 @@ function cleanMap(map) {
 // Menú persistente (ReplyKeyboard) — siempre visible en la parte inferior del chat
 const mainMenu = new Keyboard()
   .text('📋 Registrar').text('💰 Balance').row()
-  .text('📊 Resumen').text('💳 Tarjeta').row()
-  .text('📝 Últimas').text('🔄 Cuotas').row()
-  .text('💵 Flujo').text('🗑 Borrar').row()
-  .text('🤝 Saldar').text('💎 Crypto').row()
-  .text('📈 Inversiones').text('🏦 Ahorro').row()
-  .text('🔮 Próximo').text('❓ Ayuda').row()
+  .text('📊 Resumen').text('📝 Últimas').row()
+  .text('💵 Flujo').text('🔮 Próximo').row()
+  .text('📅 Proyección').text('🤝 Saldar').row()
+  .text('❓ Ayuda').row()
   .resized().persistent();
 
 // Mapeo botón del menú → nombre de comando
@@ -94,16 +92,11 @@ const MENU_MAP = {
   '📋 Registrar':  'registrar_menu',
   '💰 Balance':    'balance',
   '📊 Resumen':    'resumen',
-  '💳 Tarjeta':    'tarjeta',
   '📝 Últimas':    'ultimas',
-  '🔄 Cuotas':     'cuotas',
   '💵 Flujo':      'flujo',
-  '🗑 Borrar':     'borrar',
-  '🤝 Saldar':     'saldar',
-  '💎 Crypto':     'crypto',
-  '📈 Inversiones': 'inversiones',
-  '🏦 Ahorro':     'ahorro',
   '🔮 Próximo':    'proximo',
+  '📅 Proyección': 'proyeccion',
+  '🤝 Saldar':     'saldar',
   '❓ Ayuda':      'start',
 };
 
@@ -664,7 +657,7 @@ async function cmdTarjeta(ctx) {
     text += '\n*Detalle:*\n';
     for (const tx of tarjeta) {
       const fechaCorta = tx.fecha.substring(0, 5);
-      const cardLabel = multiCard ? ` [${tx.metodoPago}]` : '';
+      const cardLabel = multiCard ? ` (${tx.metodoPago})` : '';
       text += `• ${fechaCorta} — ${tx.descripcion} — ${fmtMonto(tx.monto, tx.moneda)}${cardLabel}\n`;
     }
 
@@ -1971,18 +1964,14 @@ const CMD_HANDLERS = {
   start: cmdStart,
   balance: cmdBalance,
   resumen: cmdResumen,
-  tarjeta: cmdTarjeta,
   ultimas: cmdUltimas,
-  cuotas: cmdCuotas,
   flujo: cmdFlujo,
   registrar_fijos: cmdRegistrarFijos,
   registrar_menu: cmdRegistrarMenu,
   gasto: cmdGasto,
-  borrar: cmdBorrar,
   saldar: cmdSaldar,
-  crypto: cmdCrypto,
-  inversiones: cmdInversiones,
   proximo: cmdProximo,
+  proyeccion: cmdProyeccion,
 };
 
 // /ingreso [monto] [descripcion] — registrar ingreso extra
