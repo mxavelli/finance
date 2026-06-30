@@ -85,7 +85,7 @@ const mainMenu = new Keyboard()
   .text('📊 Resumen').text('📝 Últimas').row()
   .text('💵 Flujo').text('🔮 Próximo').row()
   .text('📅 Proyección').text('🤝 Saldar').row()
-  .text('❓ Ayuda').row()
+  .text('💎 Ahorro').text('❓ Ayuda').row()
   .resized().persistent();
 
 // Mapeo botón del menú → nombre de comando
@@ -98,6 +98,7 @@ const MENU_MAP = {
   '🔮 Próximo':    'proximo',
   '📅 Proyección': 'proyeccion',
   '🤝 Saldar':     'saldar',
+  '💎 Ahorro':     'ahorro',
   '❓ Ayuda':      'start',
 };
 
@@ -2081,6 +2082,7 @@ const CMD_HANDLERS = {
   saldar: cmdSaldar,
   proximo: cmdProximo,
   proyeccion: cmdProyeccion,
+  ahorro: cmdAhorro,
 };
 
 // /ingreso [monto] [descripcion] — registrar ingreso extra
