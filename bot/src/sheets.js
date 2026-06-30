@@ -3576,6 +3576,20 @@ async function setupAhorro() {
   console.log('Setup Ahorro completado.');
 }
 
+// Convierte un valor de fecha leído sin formato a dd/mm/yyyy.
+// Como leemos con UNFORMATTED_VALUE (para que el saldo venga numérico), una
+// celda con fecha vuelve como número de serie de Sheets (días desde 1899-12-30);
+// el texto ('-') vuelve tal cual.
+function fechaDesdeSerial(v) {
+  if (v === undefined || v === '') return '-';
+  const n = typeof v === 'number' ? v : parseFloat(v);
+  if (!Number.isFinite(n)) return String(v);
+  const d = new Date(Date.UTC(1899, 11, 30) + Math.round(n) * 86400000);
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  return `${dd}/${mm}/${d.getUTCFullYear()}`;
+}
+
 // Lee los saldos actuales de Deel USD y ARS Banco.
 async function getAhorroCuentas() {
   const response = await sheets.spreadsheets.values.get({
@@ -3589,11 +3603,11 @@ async function getAhorroCuentas() {
   return {
     deelUsd: {
       saldo: parseFloat(deelRow[1]) || 0,
-      fecha: deelRow[3] !== undefined ? String(deelRow[3]) : '-',
+      fecha: fechaDesdeSerial(deelRow[3]),
     },
     arsBanco: {
       saldo: parseFloat(bancoRow[1]) || 0,
-      fecha: bancoRow[3] !== undefined ? String(bancoRow[3]) : '-',
+      fecha: fechaDesdeSerial(bancoRow[3]),
     },
   };
 }
