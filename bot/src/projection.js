@@ -17,6 +17,42 @@ function nowBA() {
   return { month: d.getMonth() + 1, year: d.getFullYear() };
 }
 
+// Parsea "MM/YYYY" a { month, year }. Copia local del helper de index.js (no exportado).
+function parseMesAnio(str) {
+  const p = (str || '').split('/');
+  return { month: parseInt(p[0]), year: parseInt(p[1]) };
+}
+
+// Diferencia en meses entre dos { month, year }. Copia local del helper de index.js.
+function monthsDiff(from, to) {
+  return (to.year - from.year) * 12 + (to.month - from.month);
+}
+
+// Carga de cuotas del usuario en un mes/año, medida POR CALENDARIO.
+// Una cuota está activa si 0 <= monthsDiff(primeraCuota, {month,year}) < cuotasTotales,
+// sin importar si ya fue registrada (a diferencia de getPendingCuotasForMonth, que da $0
+// para meses pasados y por eso no sirve para el baseline histórico).
+// Solo ARS. Filtro por usuario igual que filterCuotasForUser (individual propio + compartidos).
+// Compartido al 50%.
+function cuotaLoadForMonth(cuotasRaw, userId, month, year) {
+  const esMoises = userId === config.moisesId;
+  const target = { month, year };
+  let total = 0;
+  for (const c of cuotasRaw) {
+    if (c.moneda !== 'ARS') continue;
+    if (!c.primeraCuota) continue;
+    const tipo = (c.tipo || '').toLowerCase().trim();
+    if (tipo.includes('moises') && !esMoises) continue;
+    if (tipo.includes('oriana') && esMoises) continue;
+    const primera = parseMesAnio(c.primeraCuota);
+    const diff = monthsDiff(primera, target);
+    if (diff < 0 || diff >= c.cuotasTotales) continue;
+    const factor = tipo.includes('compartido') ? 0.5 : 1.0;
+    total += (c.montoCuota || 0) * factor;
+  }
+  return total;
+}
+
 // Promedia el gasto histórico real del usuario sumando transacciones de los últimos N meses.
 // Incluye: transacciones donde pagadoPor = quien, o tipo = Compartido (al 50%).
 // Excluye categorías positivas (Ahorro / Inversión): son plata que se aparta, no consumo.
@@ -119,10 +155,23 @@ async function buildProjection(targetMonth, targetYear, userId, fijosUser, cuota
   }
 
   // 5. Variable ARS: promedio de transacciones reales del usuario (últimos 3 meses)
-  //    menos fijos y cuotas (ya contabilizados explícitamente arriba).
+  //    menos fijos y la carga de cuotas HISTÓRICA (no la del mes objetivo).
+  //    avgTxArs ya incluye los pagos de cuotas que estaban activos en esos meses;
+  //    descontar la carga histórica (cuotaLoadHist) deja una base de variables limpia, y
+  //    permite que el sobrante del mes objetivo refleje su carga de cuotas REAL en vez de
+  //    quedar plano. Equivale a: sobrante = (incomeArs − avgTxArs) + cuotaLoadHist − cuotasArs.
   //    No usa computeBaseline/pagosTC para evitar inflación por estimado TC × 1.5.
+  const cuotasRaw = deps.cuotasRaw || [];
+  let sumHist = 0;
+  for (let i = 1; i <= 3; i++) {
+    let m = today.month - i, y = today.year;
+    if (m <= 0) { m += 12; y--; }
+    sumHist += cuotaLoadForMonth(cuotasRaw, userId, m, y);
+  }
+  const cuotaLoadHist = sumHist / 3;
+
   const { avg: avgTxArs, fromMonths } = await avgTransactionSpend(quien, 'ARS', 3, today, getMonthlyTransactions);
-  const variablesArs = Math.max(0, avgTxArs - fijosArs - cuotasArs);
+  const variablesArs = Math.max(0, avgTxArs - fijosArs - cuotaLoadHist);
 
   // 6. Variable USD: igual para USD
   const { avg: avgTxUsd } = await avgTransactionSpend(quien, 'USD', 3, today, getMonthlyTransactions);
@@ -155,4 +204,4 @@ async function buildProjection(targetMonth, targetYear, userId, fijosUser, cuota
   };
 }
 
-module.exports = { buildProjection, VERDICT_EMOJI };
+module.exports = { buildProjection, cuotaLoadForMonth, VERDICT_EMOJI };

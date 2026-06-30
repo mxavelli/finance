@@ -122,7 +122,7 @@ async function simulateAffordability(parsed, userId, today, deps) {
     const fijosUser = deps.filterGastosForUser(deps.filterGastosByFrequency(fijosRaw, imp.month), userId);
     const cuotasUser = deps.filterCuotasForUser(deps.getPendingCuotasForMonth(cuotasRaw, imp.month, imp.year), userId);
 
-    const proj = await buildProjection(imp.month, imp.year, userId, fijosUser, cuotasUser, deps);
+    const proj = await buildProjection(imp.month, imp.year, userId, fijosUser, cuotasUser, { ...deps, cuotasRaw });
     const sobrante = moneda === 'USD' ? proj.sobranteUsd : proj.sobranteArs;
     const libreFinal = sobrante - imp.montoCuota - savingsTarget;
     const verdict = decideVerdict(libreFinal, moneda);

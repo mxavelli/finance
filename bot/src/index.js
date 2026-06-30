@@ -1225,7 +1225,7 @@ async function cmdProyeccion(ctx) {
     const proj = await buildProjection(
       target.month, target.year, userId,
       fijosUser, cuotasUser,
-      { getFlowData, getMonthlyTransactions, getPresupuestos }
+      { getFlowData, getMonthlyTransactions, getPresupuestos, cuotasRaw }
     );
 
     const mesLabel = `${MESES_NOMBRE[target.month - 1]} ${target.year}`;
