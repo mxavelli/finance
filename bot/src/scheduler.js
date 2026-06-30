@@ -6,10 +6,10 @@ const { InlineKeyboard } = require('grammy');
 const config = require('./config');
 const {
   getGastosFijos, getCuotas, getMonthlyTransactions,
-  getPresupuestos, getBalance,
+  getPresupuestos, getBalance, getLastTC,
   setDashboardPeriod, getDashboardPeriod,
 } = require('./sheets');
-const { CATEGORIAS_POSITIVAS } = require('./constants');
+const { CATEGORIAS_POSITIVAS, ahorradoEnArs } = require('./constants');
 
 // --- Auto-fijos diario ---
 // Revisa si hay gastos fijos con día = hoy. Si hay, manda preview a cada usuario.
@@ -225,6 +225,7 @@ async function checkSavingsAlert(bot, ctx) {
 
   const presupuestos = await getPresupuestos();
   const transactions = await getMonthlyTransactions(month, year);
+  const tc = await getLastTC();
   const fmtMonto = ctx.fmtMonto;
 
   for (const [key, budget] of presupuestos) {
@@ -232,9 +233,12 @@ async function checkSavingsAlert(bot, ctx) {
     if (!CATEGORIAS_POSITIVAS.includes(categoria)) continue;
     if (budget <= 0) continue;
 
-    const totalAhorrado = transactions
-      .filter(t => t.categoria === categoria && t.tipo === tipo && t.moneda === moneda)
-      .reduce((sum, t) => sum + t.monto, 0);
+    // La meta de ahorro está en ARS: sumar aportes ARS + aportes USD convertidos por TC.
+    const totalAhorrado = moneda === 'ARS'
+      ? ahorradoEnArs(transactions, tipo, tc)
+      : transactions
+          .filter(t => t.categoria === categoria && t.tipo === tipo && t.moneda === moneda)
+          .reduce((sum, t) => sum + t.monto, 0);
 
     const pct = (totalAhorrado / budget) * 100;
     if (pct >= 80) continue; // Va bien, no alertar

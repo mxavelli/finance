@@ -19,7 +19,7 @@ const { formatAmount } = require('./parser');
 const { startScheduler } = require('./scheduler');
 const { transcribeAudio, parseExpense, analyzeReceipt, analyzeStatementPdf, isConfigured: isAiConfigured } = require('./ai');
 const { simulateAffordability, VERDICT_EMOJI: AFFORD_EMOJI, esTarjeta: affordEsTarjeta } = require('./affordability');
-const { CATEGORIAS_POSITIVAS } = require('./constants');
+const { CATEGORIAS_POSITIVAS, ahorradoEnArs } = require('./constants');
 
 const bot = new Bot(config.botToken);
 
@@ -339,7 +339,7 @@ async function cmdStart(ctx) {
     '  Ej: `/puedo tv 800000 visa galicia 12 cuotas`\n\n' +
 
     '*💎 Patrimonio*\n' +
-    '/ahorro — Ahorro total: Deel USD + ARS Banco + Crypto + Inversiones\n' +
+    '/ahorro — Ahorro total + registrar aporte (suma al saldo y cuenta para la meta)\n' +
     '/crypto — Portafolio crypto con precio live (compras/ventas)\n' +
     '/inversiones — Portafolio PPI (valor total + composición)\n\n' +
 
@@ -1329,12 +1329,11 @@ async function cmdMeta(ctx) {
       );
     }
 
-    // Ahorro actual del mes
+    // Ahorro actual del mes (aportes ARS + aportes USD convertidos por TC)
+    const tc = await getLastTC();
     const transactions = await getMonthlyTransactions(today.month, today.year);
     const tipoFilter = `Individual ${quien}`;
-    const ahorradoArs = transactions
-      .filter(t => t.categoria === 'Ahorro / Inversión' && t.tipo === tipoFilter && t.moneda === 'ARS')
-      .reduce((sum, t) => sum + t.monto, 0);
+    const ahorradoArs = ahorradoEnArs(transactions, tipoFilter, tc);
 
     // Días del mes y restantes
     const diasMes = new Date(today.year, today.month, 0).getDate();
@@ -1376,9 +1375,7 @@ async function cmdMeta(ctx) {
       if (hm === 1) { hm = 12; hy--; } else hm--;
       try {
         const txs = await getMonthlyTransactions(hm, hy);
-        const tot = txs
-          .filter(t => t.categoria === 'Ahorro / Inversión' && t.tipo === tipoFilter && t.moneda === 'ARS')
-          .reduce((sum, t) => sum + t.monto, 0);
+        const tot = ahorradoEnArs(txs, tipoFilter, tc);
         historico.push({ m: hm, y: hy, tot });
       } catch (e) { /* skip */ }
     }
@@ -1851,6 +1848,7 @@ async function cmdAhorro(ctx) {
     if (tc > 0) text += `\n_(TC: ${fmtMonto(tc, 'ARS')})_`;
 
     const keyboard = new InlineKeyboard()
+      .text('📥 Registré aporte', 'sav_aporte').row()
       .text('💵 Actualizar Deel USD', 'sav_deel').row()
       .text('🏦 Actualizar ARS Banco', 'sav_banco');
 
@@ -1915,6 +1913,103 @@ bot.callbackQuery(/^sav_no:(\d+)$/, async (ctx) => {
   const savId = parseInt(ctx.match[1]);
   pendingAhorro.delete(savId);
   await ctx.editMessageText('Actualización cancelada.');
+  await ctx.answerCallbackQuery({ text: 'Cancelado' });
+});
+
+// Callback: registrar aporte de ahorro → elegir cuenta
+bot.callbackQuery('sav_aporte', async (ctx) => {
+  const keyboard = new InlineKeyboard()
+    .text('💵 Deel USD', 'apo_deel').row()
+    .text('🏦 ARS Banco', 'apo_banco');
+  await ctx.editMessageText(
+    '📥 *Registrar aporte de ahorro*\n\n¿A qué cuenta lo apartaste?',
+    { parse_mode: 'Markdown', reply_markup: keyboard }
+  );
+  await ctx.answerCallbackQuery();
+});
+
+// Callbacks: elegir cuenta del aporte y pedir monto
+bot.callbackQuery('apo_deel', async (ctx) => {
+  pendingAhorro.set(ctx.from.id, { cuenta: 'deelUsd', action: 'aporte_waiting', createdAt: Date.now() });
+  await ctx.editMessageText(
+    '💵 *Aporte a Deel USD*\n\nEscribí cuánto aportaste en USD.\nEjemplo: `500` o `500,50`',
+    { parse_mode: 'Markdown' }
+  );
+  await ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery('apo_banco', async (ctx) => {
+  pendingAhorro.set(ctx.from.id, { cuenta: 'arsBanco', action: 'aporte_waiting', createdAt: Date.now() });
+  await ctx.editMessageText(
+    '🏦 *Aporte a ARS Banco*\n\nEscribí cuánto aportaste en ARS.\nEjemplo: `600000` o `600.000`',
+    { parse_mode: 'Markdown' }
+  );
+  await ctx.answerCallbackQuery();
+});
+
+// Callback: confirmar aporte → crea transacción de ahorro + suma al saldo de la cuenta
+bot.callbackQuery(/^apo_ok:(\d+)$/, async (ctx) => {
+  const apoId = parseInt(ctx.match[1]);
+  const pending = pendingAhorro.get(apoId);
+  if (!pending) return ctx.answerCallbackQuery({ text: 'Expirado.' });
+  if (ctx.from.id !== pending.userId) return ctx.answerCallbackQuery({ text: 'No autorizado.' });
+
+  pendingAhorro.delete(apoId);
+
+  try {
+    const { month, year, day } = getNowBA();
+    const fecha = `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
+    const hora = new Date().toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit', hour12: false });
+    const quien = pending.userId === config.moisesId ? 'Moises' : 'Oriana';
+    const isDeelUsd = pending.cuenta === 'deelUsd';
+    const moneda = isDeelUsd ? 'USD' : 'ARS';
+    const metodoPago = isDeelUsd ? 'Deel USD' : 'Banco';
+
+    // 1. Registrar la transacción que alimenta la meta de ahorro
+    await appendTransaction({
+      fecha, hora,
+      descripcion: 'Aporte ahorro',
+      categoria: 'Ahorro / Inversión',
+      monto: pending.monto,
+      moneda,
+      metodoPago,
+      tipo: `Individual ${quien}`,
+      pagadoPor: quien,
+      splitMoises: quien === 'Moises' ? 100 : 0,
+      splitOriana: quien === 'Oriana' ? 100 : 0,
+      notas: '',
+    });
+
+    // 2. Sumar el aporte al saldo de la cuenta en la hoja Ahorro
+    const cuentas = await getAhorroCuentas();
+    const saldoActual = cuentas[pending.cuenta].saldo;
+    const nuevoSaldo = saldoActual + pending.monto;
+    await updateAhorroCuenta(pending.cuenta, nuevoSaldo, fecha);
+
+    const nombreCuenta = isDeelUsd ? 'Deel USD' : 'ARS Banco';
+    let text = `✅ *Aporte registrado*\n\n` +
+      `${nombreCuenta}: +${fmtMonto(pending.monto, moneda)}\n` +
+      `Nuevo saldo: ${fmtMonto(nuevoSaldo, moneda)}`;
+    if (isDeelUsd) {
+      const tc = await getLastTC();
+      if (tc > 0) text += `\n\n_Cuenta para la meta como ~${fmtMonto(pending.monto * tc, 'ARS')} (TC ${fmtMonto(tc, 'ARS')})._`;
+    }
+    text += `\n\nMirá tu progreso con /meta`;
+
+    await ctx.editMessageText(text, { parse_mode: 'Markdown' });
+    await ctx.answerCallbackQuery({ text: 'Aporte registrado' });
+  } catch (error) {
+    console.error('Error registrando aporte:', error.message);
+    await ctx.editMessageText('Error registrando el aporte. Revisá los logs.');
+    await ctx.answerCallbackQuery({ text: 'Error' });
+  }
+});
+
+// Callback: cancelar aporte
+bot.callbackQuery(/^apo_no:(\d+)$/, async (ctx) => {
+  const apoId = parseInt(ctx.match[1]);
+  pendingAhorro.delete(apoId);
+  await ctx.editMessageText('Aporte cancelado.');
   await ctx.answerCallbackQuery({ text: 'Cancelado' });
 });
 
@@ -2895,43 +2990,57 @@ bot.on('message:text', async (ctx) => {
       return ctx.reply(confirmText, { parse_mode: 'Markdown', reply_markup: keyboard });
     }
 
-    // Interceptar si el usuario está actualizando saldo de ahorro
+    // Interceptar si el usuario está actualizando saldo o registrando aporte de ahorro
     const ahoroPending = pendingAhorro.get(ctx.from.id);
-    if (ahoroPending && ahoroPending.action === 'update_waiting') {
+    if (ahoroPending && (ahoroPending.action === 'update_waiting' || ahoroPending.action === 'aporte_waiting')) {
       const input = text.trim();
-      let saldo;
+      let monto;
       // Soporta "250.000" (miles), "250.000,50" (miles+decimales), "250000"
       if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(input)) {
-        saldo = parseFloat(input.replace(/\./g, '').replace(',', '.'));
+        monto = parseFloat(input.replace(/\./g, '').replace(',', '.'));
       } else if (/^\d+,\d+$/.test(input)) {
-        saldo = parseFloat(input.replace(',', '.'));
+        monto = parseFloat(input.replace(',', '.'));
       } else {
-        saldo = parseFloat(input);
+        monto = parseFloat(input);
       }
 
-      if (isNaN(saldo) || saldo < 0) {
+      if (isNaN(monto) || monto <= 0) {
         return ctx.reply('Monto inválido. Enviá un número positivo.');
       }
 
       pendingAhorro.delete(ctx.from.id);
 
-      const savId = ++txCounter;
-      pendingAhorro.set(savId, {
+      const nombreCuenta = ahoroPending.cuenta === 'deelUsd' ? 'Deel USD' : 'ARS Banco';
+      const moneda = ahoroPending.cuenta === 'deelUsd' ? 'USD' : 'ARS';
+      const opId = ++txCounter;
+
+      if (ahoroPending.action === 'aporte_waiting') {
+        pendingAhorro.set(opId, {
+          cuenta: ahoroPending.cuenta,
+          monto,
+          userId: ctx.from.id,
+          createdAt: Date.now(),
+        });
+        const keyboard = new InlineKeyboard()
+          .text('✅ Confirmar', `apo_ok:${opId}`)
+          .text('❌ Cancelar', `apo_no:${opId}`);
+        return ctx.reply(
+          `📥 *Registrar aporte*\n\n${nombreCuenta}: +${fmtMonto(monto, moneda)}\n\n¿Confirmar?`,
+          { parse_mode: 'Markdown', reply_markup: keyboard }
+        );
+      }
+
+      pendingAhorro.set(opId, {
         cuenta: ahoroPending.cuenta,
-        saldo,
+        saldo: monto,
         userId: ctx.from.id,
         createdAt: Date.now(),
       });
-
-      const nombreCuenta = ahoroPending.cuenta === 'deelUsd' ? 'Deel USD' : 'ARS Banco';
-      const moneda = ahoroPending.cuenta === 'deelUsd' ? 'USD' : 'ARS';
-
       const keyboard = new InlineKeyboard()
-        .text('✅ Confirmar', `sav_ok:${savId}`)
-        .text('❌ Cancelar', `sav_no:${savId}`);
-
+        .text('✅ Confirmar', `sav_ok:${opId}`)
+        .text('❌ Cancelar', `sav_no:${opId}`);
       return ctx.reply(
-        `🏦 *Actualizar Ahorro*\n\n${nombreCuenta}: ${fmtMonto(saldo, moneda)}\n\n¿Confirmar?`,
+        `🏦 *Actualizar Ahorro*\n\n${nombreCuenta}: ${fmtMonto(monto, moneda)}\n\n¿Confirmar?`,
         { parse_mode: 'Markdown', reply_markup: keyboard }
       );
     }
