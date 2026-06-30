@@ -19,6 +19,7 @@ const { formatAmount } = require('./parser');
 const { startScheduler } = require('./scheduler');
 const { transcribeAudio, parseExpense, analyzeReceipt, analyzeStatementPdf, isConfigured: isAiConfigured } = require('./ai');
 const { simulateAffordability, VERDICT_EMOJI: AFFORD_EMOJI, esTarjeta: affordEsTarjeta } = require('./affordability');
+const { CATEGORIAS_POSITIVAS } = require('./constants');
 
 const bot = new Bot(config.botToken);
 
@@ -225,10 +226,6 @@ async function replyChunked(ctx, text, options) {
   }
   if (chunk) await ctx.reply(chunk, options);
 }
-
-// Categorías donde exceder el presupuesto es positivo (ahorro/inversión).
-// Para estas se invierte la lógica: alerta cuando estás BAJO la meta.
-const CATEGORIAS_POSITIVAS = ['Ahorro / Inversión'];
 
 // Verifica si una transacción superó el 80% o 100% del presupuesto de su categoría.
 // Para categorías positivas (ahorro), no alerta al exceder.

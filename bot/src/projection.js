@@ -7,6 +7,7 @@
 //   que infla los gastos cuando Pagos TC no está cargado en el Sheet.
 
 const config = require('./config');
+const { CATEGORIAS_POSITIVAS } = require('./constants');
 
 const VERDICT_EMOJI = { SI: '✅', JUSTO: '⚠️', NO: '❌' };
 
@@ -18,6 +19,9 @@ function nowBA() {
 
 // Promedia el gasto histórico real del usuario sumando transacciones de los últimos N meses.
 // Incluye: transacciones donde pagadoPor = quien, o tipo = Compartido (al 50%).
+// Excluye categorías positivas (Ahorro / Inversión): son plata que se aparta, no consumo.
+// Contarlas inflaría el gasto y, como la meta de ahorro se resta aparte, el ahorro
+// se descontaría dos veces.
 // Esto evita el problema del estimado TC × 1.5 de affordability.js.
 async function avgTransactionSpend(quien, moneda, monthsBack, today, getMonthlyTransactions) {
   let total = 0, count = 0;
@@ -27,9 +31,10 @@ async function avgTransactionSpend(quien, moneda, monthsBack, today, getMonthlyT
     try {
       const trans = await getMonthlyTransactions(m, y);
       const monthSum = trans
-        .filter(t => t.moneda === moneda && (
-          t.pagadoPor === quien || (t.tipo || '').toLowerCase().includes('compartido')
-        ))
+        .filter(t => t.moneda === moneda
+          && !CATEGORIAS_POSITIVAS.includes(t.categoria)
+          && (t.pagadoPor === quien || (t.tipo || '').toLowerCase().includes('compartido'))
+        )
         .reduce((sum, t) => {
           const isComp = (t.tipo || '').toLowerCase().includes('compartido');
           return sum + (isComp ? t.monto * 0.5 : t.monto);

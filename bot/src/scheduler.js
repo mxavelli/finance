@@ -9,6 +9,7 @@ const {
   getPresupuestos, getBalance,
   setDashboardPeriod, getDashboardPeriod,
 } = require('./sheets');
+const { CATEGORIAS_POSITIVAS } = require('./constants');
 
 // --- Auto-fijos diario ---
 // Revisa si hay gastos fijos con día = hoy. Si hay, manda preview a cada usuario.
@@ -217,8 +218,6 @@ async function sendWeeklySummary(bot, ctx) {
 // --- Alerta de ahorro bajo ---
 // Del día 25 en adelante, revisa si las categorías positivas (Ahorro / Inversión)
 // están por debajo del 80% de la meta. Alerta una vez por mes por categoría.
-
-const CATEGORIAS_POSITIVAS = ['Ahorro / Inversión'];
 
 async function checkSavingsAlert(bot, ctx) {
   const { month, year, day } = ctx.getNowBA();
